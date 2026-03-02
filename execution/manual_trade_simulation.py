@@ -1,54 +1,69 @@
-from execution.trade_formatter import format_trade_approval
-from execution.execution_engine import execute_trade
 from execution.trade_state_manager import TradeStateManager
-from execution.portfolio_risk_evaluator import PortfolioRiskEvaluator
+from execution.trade_orchestrator import TradeOrchestrator
 
 
 def run_simulation():
     state_manager = TradeStateManager()
 
-    # Existing portfolio
-    existing_trades = [
-        ("EUR/USD", "Long", 1.0, 1.1050),
-        ("GBP/USD", "Short", 2.0, 1.2500),
-        ("USD/JPY", "Long", 1.5, 110.00),
-    ]
+    # Seed portfolio with existing trades
+    state_manager.record_trade({
+        "execution_status": "Filled",
+        "currency_pair": "EUR/USD",
+        "direction": "Long",
+        "position_size": 1.0,
+        "fill_price": 1.1000,
+        "stop_loss_price": 1.0950,
+        "take_profit_price": 1.1100,
+        "timestamp": "2026-02-20T00:00:00Z",
+    })
 
-    for pair, direction, size, price in existing_trades:
-        trade = format_trade_approval(
-            approval_status="Approved",
-            currency_pair=pair,
-            direction=direction,
-            position_size=size,
-            stop_loss=0.0,
-            take_profit=0.0,
-            risk_rationale="Initial portfolio build",
-        )
+    state_manager.record_trade({
+        "execution_status": "Filled",
+        "currency_pair": "GBP/USD",
+        "direction": "Short",
+        "position_size": 2.0,
+        "fill_price": 1.2500,
+        "stop_loss_price": 1.2600,
+        "take_profit_price": 1.2300,
+        "timestamp": "2026-02-20T00:05:00Z",
+    })
 
-        execution_result = execute_trade(trade, market_price=price)
-        state_manager.record_trade(execution_result)
+    # Proposed trade
+    proposed_trade = {
+        "currency_pair": "USD/JPY",
+        "direction": "Long",
+        "approved_position_size": 2.0,
+        "entry_price": 110.50,
+        "stop_loss_price": 109.80,
+        "take_profit_price": 111.20,
+    }
 
-    current_trades = state_manager.get_all_trades()
+    request_id = "REQ-001"
 
-    # Proposed trade that should breach USD limit
-    proposed_trade = format_trade_approval(
-        approval_status="Approved",
-        currency_pair="USD/JPY",
-        direction="Long",
-        position_size=1.0,
-        stop_loss=0.0,
-        take_profit=0.0,
-        risk_rationale="Test USD breach",
-    )
-
-    risk_decision = PortfolioRiskEvaluator.evaluate_trade(
-        current_trades=current_trades,
+    result_1 = TradeOrchestrator.process_trade(
+        state_manager=state_manager,
+        request_id=request_id,
         proposed_trade=proposed_trade,
         max_currency_exposure=3.0,
+        market_price=110.50,
     )
 
-    print("=== RISK DECISION ===")
-    print(risk_decision)
+    result_2 = TradeOrchestrator.process_trade(
+        state_manager=state_manager,
+        request_id=request_id,  # Same ID
+        proposed_trade=proposed_trade,
+        max_currency_exposure=3.0,
+        market_price=110.50,
+    )
+
+    print("=== FIRST CALL RESULT ===")
+    print(result_1)
+
+    print("=== SECOND CALL RESULT (SHOULD BE IDENTICAL, NO RE-EXECUTION) ===")
+    print(result_2)
+
+    print("=== CURRENT STATE ===")
+    print(state_manager.get_all_trades())
 
 
 if __name__ == "__main__":
