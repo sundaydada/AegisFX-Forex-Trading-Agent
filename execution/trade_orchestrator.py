@@ -49,7 +49,7 @@ class TradeOrchestrator:
             state_manager.record_processed_result(request_id, result)
             return result
 
-        # Step 2: Execute Trade
+        # Step 2: Execute Trade (no state mutation)
         execution_trade = {
             "currency_pair": proposed_trade["currency_pair"],
             "direction": proposed_trade["direction"],
@@ -64,14 +64,16 @@ class TradeOrchestrator:
             market_price,
         )
 
-        # Step 3: Persist Only If Filled
-        if execution_result["execution_status"] == "Filled":
-            state_manager.record_trade(execution_result)
-
-        result = {
+        # Build final result before any state mutation
+        final_result = {
             "approval_status": "Approved",
             "reason": risk_decision["reason"],
             "execution_result": execution_result,
         }
-        state_manager.record_processed_result(request_id, result)
-        return result
+
+        # Step 3: Atomic Commit
+        if execution_result["execution_status"] == "Filled":
+            state_manager.record_trade(execution_result)
+        state_manager.record_processed_result(request_id, final_result)
+
+        return final_result
