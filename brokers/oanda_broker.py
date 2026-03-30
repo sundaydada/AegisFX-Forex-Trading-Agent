@@ -40,7 +40,65 @@ class OandaBroker(BrokerInterface):
             )
 
     def place_order(self, order: Dict) -> Dict:
-        raise NotImplementedError("OANDA place_order not yet implemented")
+        required_fields = ["currency_pair", "direction", "position_size"]
+        for field in required_fields:
+            if field not in order:
+                return {
+                    "execution_status": "Rejected",
+                    "reason": f"Missing required field: {field}",
+                }
+
+        instrument = order["currency_pair"].replace("/", "_")
+        units = order["position_size"]
+        if order["direction"] == "Short":
+            units = -units
+
+        payload = {
+            "order": {
+                "type": "MARKET",
+                "instrument": instrument,
+                "units": str(int(units)),
+                "timeInForce": "FOK",
+                "positionFill": "DEFAULT",
+            }
+        }
+
+        try:
+            data = self._make_request("/orders", method="POST", body=payload)
+        except RuntimeError as e:
+            return {
+                "execution_status": "Rejected",
+                "reason": f"Order API error: {str(e)}",
+            }
+
+        if "orderRejectTransaction" in data:
+            reject = data["orderRejectTransaction"]
+            return {
+                "execution_status": "Rejected",
+                "reason": reject.get("rejectReason", "Order rejected by broker"),
+            }
+
+        fill = data.get("orderFillTransaction")
+        if not fill:
+            return {
+                "execution_status": "Rejected",
+                "reason": "Malformed response: missing orderFillTransaction",
+            }
+
+        try:
+            return {
+                "execution_status": "Filled",
+                "currency_pair": order["currency_pair"],
+                "direction": order["direction"],
+                "units": abs(float(fill.get("units", 0))),
+                "fill_price": float(fill.get("price", 0)),
+                "timestamp": fill.get("time", ""),
+            }
+        except (ValueError, TypeError) as e:
+            return {
+                "execution_status": "Rejected",
+                "reason": f"Failed to parse fill data: {str(e)}",
+            }
 
     def get_open_positions(self) -> List:
         try:
