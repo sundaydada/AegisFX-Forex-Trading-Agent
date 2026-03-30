@@ -9,6 +9,7 @@ class ExecutionEngine:
         Deterministically simulate trade execution.
         Expects execution-ready trade object.
         """
+        
 
         required_fields = [
             "currency_pair",
