@@ -14,9 +14,6 @@ class TradeStateManager:
         # Maps request_id → orchestrator result
 
     def record_trade(self, trade: Dict) -> None:
-        if trade.get("execution_status") != "Filled":
-            return
-
         self._trades.append(trade)
 
     def get_all_trades(self) -> List[Dict]:

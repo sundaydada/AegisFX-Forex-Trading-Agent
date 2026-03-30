@@ -19,14 +19,7 @@ class PersistentTradeStateManager:
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                currency_pair TEXT NOT NULL,
-                direction TEXT NOT NULL,
-                position_size REAL NOT NULL,
-                fill_price REAL NOT NULL,
-                stop_loss_price REAL NOT NULL,
-                take_profit_price REAL NOT NULL,
-                timestamp TEXT NOT NULL,
-                execution_status TEXT NOT NULL
+                trade_json TEXT NOT NULL
             )
         """)
         self._conn.execute("""
@@ -38,52 +31,18 @@ class PersistentTradeStateManager:
         self._conn.commit()
 
     def record_trade(self, trade: Dict) -> None:
-        if trade.get("execution_status") != "Filled":
-            return
-
         self._conn.execute(
-            """
-            INSERT INTO trades (
-                currency_pair, direction, position_size,
-                fill_price, stop_loss_price, take_profit_price,
-                timestamp, execution_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                trade["currency_pair"],
-                trade["direction"],
-                trade["position_size"],
-                trade["fill_price"],
-                trade["stop_loss_price"],
-                trade["take_profit_price"],
-                trade["timestamp"],
-                trade["execution_status"],
-            ),
+            "INSERT INTO trades (trade_json) VALUES (?)",
+            (json.dumps(trade),),
         )
         self._conn.commit()
 
     def get_all_trades(self) -> List[Dict]:
-        cursor = self._conn.execute(
-            """
-            SELECT currency_pair, direction, position_size,
-                   fill_price, stop_loss_price, take_profit_price,
-                   timestamp, execution_status
-            FROM trades
-            """
-        )
+        cursor = self._conn.execute("SELECT trade_json FROM trades")
 
         trades = []
         for row in cursor:
-            trades.append({
-                "currency_pair": row[0],
-                "direction": row[1],
-                "position_size": row[2],
-                "fill_price": row[3],
-                "stop_loss_price": row[4],
-                "take_profit_price": row[5],
-                "timestamp": row[6],
-                "execution_status": row[7],
-            })
+            trades.append(json.loads(row[0]))
 
         return trades
 
