@@ -25,6 +25,13 @@ class TradeStateManager:
         """
         return sum(trade["position_size"] for trade in self._trades)
 
+    def update_trade(self, request_id: str, execution_result: Dict) -> None:
+        for trade in self._trades:
+            if trade.get("request_id") == request_id and trade.get("status") == "PENDING":
+                trade.update(execution_result)
+                trade["status"] = "FILLED"
+                return
+
     def has_processed(self, request_id: str) -> bool:
         return request_id in self._processed_requests
 

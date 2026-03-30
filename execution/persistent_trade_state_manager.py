@@ -46,6 +46,24 @@ class PersistentTradeStateManager:
 
         return trades
 
+    def update_trade(self, request_id: str, execution_result: Dict) -> None:
+        cursor = self._conn.execute(
+            "SELECT id, trade_json FROM trades WHERE trade_json LIKE ?",
+            (f'%"request_id": "{request_id}"%',),
+        )
+
+        for row in cursor:
+            trade = json.loads(row[1])
+            if trade.get("status") == "PENDING":
+                trade.update(execution_result)
+                trade["status"] = "FILLED"
+                self._conn.execute(
+                    "UPDATE trades SET trade_json = ? WHERE id = ?",
+                    (json.dumps(trade), row[0]),
+                )
+                self._conn.commit()
+                return
+
     def has_processed(self, request_id: str) -> bool:
         cursor = self._conn.execute(
             "SELECT 1 FROM processed_requests WHERE request_id = ?",

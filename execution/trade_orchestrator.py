@@ -77,9 +77,8 @@ class TradeOrchestrator:
             "execution_result": execution_result,
         }
 
-        # Step 3: Atomic Commit
-        if execution_result["execution_status"] == "Filled":
-            state_manager.record_trade(execution_result)
+        # Step 4: Atomic Commit — update pending record, don't create new one
+        state_manager.update_trade(request_id, execution_result)
         state_manager.record_processed_result(request_id, final_result)
 
         return final_result
