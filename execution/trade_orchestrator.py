@@ -51,7 +51,17 @@ class TradeOrchestrator:
             state_manager.record_processed_result(request_id, result)
             return result
 
-        # Step 2: Execute Trade via broker (no state mutation)
+        # Step 2: Record pending trade before broker call
+        pending_trade = {
+            "request_id": request_id,
+            "currency_pair": proposed_trade["currency_pair"],
+            "direction": proposed_trade["direction"],
+            "position_size": proposed_trade["approved_position_size"],
+            "status": "PENDING",
+        }
+        state_manager.record_trade(pending_trade)
+
+        # Step 3: Execute Trade via broker
         order = {
             "currency_pair": proposed_trade["currency_pair"],
             "direction": proposed_trade["direction"],
