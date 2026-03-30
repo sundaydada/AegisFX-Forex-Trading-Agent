@@ -70,15 +70,21 @@ class TradeOrchestrator:
 
         execution_result = self._broker.place_order(order)
 
+        # Step 4: Map execution status to trade lifecycle status
+        if execution_result["execution_status"] == "Filled":
+            trade_status = "FILLED"
+        else:
+            trade_status = "FAILED"
+
         # Build final result before any state mutation
         final_result = {
-            "approval_status": "Approved",
+            "approval_status": "Approved" if trade_status == "FILLED" else "Failed",
             "reason": risk_decision["reason"],
             "execution_result": execution_result,
         }
 
-        # Step 4: Atomic Commit — update pending record, don't create new one
-        state_manager.update_trade(request_id, execution_result)
+        # Step 5: Atomic Commit — update pending record, don't create new one
+        state_manager.update_trade(request_id, execution_result, status=trade_status)
         state_manager.record_processed_result(request_id, final_result)
 
         return final_result
