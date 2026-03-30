@@ -2,6 +2,9 @@
   "permissions": {
     "additionalDirectories": [
       "C:\\Users\\Dell\\OneDrive"
+    ],
+    "allow": [
+      "Bash(python -c \":*)"
     ]
   }
 }
