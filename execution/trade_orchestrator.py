@@ -1,5 +1,5 @@
 from typing import Dict, List
-from execution.execution_engine import ExecutionEngine
+from brokers.broker_interface import BrokerInterface
 from execution.trade_state_manager import TradeStateManager
 from execution.portfolio_risk_evaluator import PortfolioRiskEvaluator
 
@@ -10,13 +10,15 @@ class TradeOrchestrator:
     This is the ONLY valid trade execution entry point.
     """
 
-    @staticmethod
+    def __init__(self, broker: BrokerInterface):
+        self._broker = broker
+
     def process_trade(
+        self,
         state_manager: TradeStateManager,
         request_id: str,
         proposed_trade: Dict,
         max_currency_exposure: float,
-        market_price: float,
     ) -> Dict:
         """
         Returns structured result:
@@ -49,20 +51,14 @@ class TradeOrchestrator:
             state_manager.record_processed_result(request_id, result)
             return result
 
-        # Step 2: Execute Trade (no state mutation)
-        execution_trade = {
+        # Step 2: Execute Trade via broker (no state mutation)
+        order = {
             "currency_pair": proposed_trade["currency_pair"],
             "direction": proposed_trade["direction"],
             "position_size": proposed_trade["approved_position_size"],
-            "entry_price": proposed_trade["entry_price"],
-            "stop_loss_price": proposed_trade["stop_loss_price"],
-            "take_profit_price": proposed_trade["take_profit_price"],
         }
 
-        execution_result = ExecutionEngine.execute_trade(
-            execution_trade,
-            market_price,
-        )
+        execution_result = self._broker.place_order(order)
 
         # Build final result before any state mutation
         final_result = {
