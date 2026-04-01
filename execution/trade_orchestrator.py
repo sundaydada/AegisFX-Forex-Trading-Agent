@@ -1,17 +1,35 @@
+import logging
 from typing import Dict, List
+from datetime import datetime, timezone
 from brokers.broker_interface import BrokerInterface
 from execution.trade_state_manager import TradeStateManager
 from execution.portfolio_risk_evaluator import PortfolioRiskEvaluator
 
+PENDING_TIMEOUT_SECONDS = 60
+
+logger = logging.getLogger("aegisfx.orchestrator")
+
 
 class TradeOrchestrator:
     """
-    Enforces approval → execution → state persistence flow.
+    Enforces approval -> execution -> state persistence flow.
     This is the ONLY valid trade execution entry point.
     """
 
     def __init__(self, broker: BrokerInterface):
         self._broker = broker
+        self._trade_timestamps = []
+        self._max_trades_per_minute = 5
+        self._metrics = {
+            "total_trades": 0,
+            "successful_trades": 0,
+            "failed_trades": 0,
+            "timeout_trades": 0,
+            "exception_trades": 0,
+        }
+
+    def get_metrics(self) -> Dict:
+        return dict(self._metrics)
 
     def process_trade(
         self,
@@ -29,11 +47,48 @@ class TradeOrchestrator:
         }
         """
 
+        logger.info({
+            "event": "trade_received",
+            "request_id": request_id,
+            "currency_pair": proposed_trade.get("currency_pair"),
+            "direction": proposed_trade.get("direction"),
+            "position_size": proposed_trade.get("approved_position_size"),
+        })
+
         # Idempotency check
         if state_manager.has_processed(request_id):
+            logger.info({"event": "idempotency_hit", "request_id": request_id})
             return state_manager.get_processed_result(request_id)
 
         current_trades = state_manager.get_all_trades()
+
+        # Crash recovery check — prevent duplicate broker execution
+        for trade in current_trades:
+            if trade.get("request_id") == request_id and trade.get("status") != "PENDING":
+                logger.info({"event": "crash_recovery_hit", "request_id": request_id})
+                return state_manager.get_processed_result(request_id)
+
+        # Rate limit check
+        now = datetime.now(timezone.utc)
+        self._trade_timestamps = [
+            ts for ts in self._trade_timestamps
+            if (now - ts).total_seconds() <= 60
+        ]
+
+        if len(self._trade_timestamps) >= self._max_trades_per_minute:
+            logger.warning({
+                "event": "rate_limit_exceeded",
+                "request_id": request_id,
+                "trades_in_window": len(self._trade_timestamps),
+            })
+            return {
+                "approval_status": "Rejected",
+                "reason": "Rate limit exceeded",
+                "execution_result": None,
+            }
+
+        self._trade_timestamps.append(now)
+        self._metrics["total_trades"] += 1
 
         # Step 1: Risk Evaluation
         risk_decision = PortfolioRiskEvaluator.evaluate_trade(
@@ -41,6 +96,13 @@ class TradeOrchestrator:
             proposed_trade=proposed_trade,
             max_currency_exposure=max_currency_exposure,
         )
+
+        logger.info({
+            "event": "risk_evaluation",
+            "request_id": request_id,
+            "approval_status": risk_decision["approval_status"],
+            "reason": risk_decision["reason"],
+        })
 
         if risk_decision["approval_status"] == "Rejected":
             result = {
@@ -58,6 +120,7 @@ class TradeOrchestrator:
             "direction": proposed_trade["direction"],
             "position_size": proposed_trade["approved_position_size"],
             "status": "PENDING",
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         state_manager.record_trade(pending_trade)
 
@@ -68,7 +131,44 @@ class TradeOrchestrator:
             "position_size": proposed_trade["approved_position_size"],
         }
 
-        execution_result = self._broker.place_order(order)
+        logger.info({"event": "executing_trade", "request_id": request_id})
+
+        try:
+            execution_result = self._broker.place_order(order)
+        except Exception as e:
+            logger.error({
+                "event": "broker_exception",
+                "request_id": request_id,
+                "error_message": str(e),
+            })
+
+            execution_result = {
+                "execution_status": "ERROR",
+                "error_message": str(e),
+            }
+
+            final_result = {
+                "approval_status": "Failed",
+                "reason": "Execution error",
+                "execution_result": execution_result,
+            }
+
+            state_manager.update_trade(request_id, execution_result, status="FAILED")
+            state_manager.record_processed_result(request_id, final_result)
+
+            self._metrics["failed_trades"] += 1
+            self._metrics["exception_trades"] += 1
+
+            logger.info({"event": "trade_finalized", "request_id": request_id, "status": "FAILED"})
+
+            return final_result
+
+        logger.info({
+            "event": "broker_response",
+            "request_id": request_id,
+            "execution_status": execution_result.get("execution_status"),
+            "error_message": execution_result.get("error_message"),
+        })
 
         # Step 4: Map execution status to trade lifecycle status
         if execution_result["execution_status"] == "Filled":
@@ -87,4 +187,72 @@ class TradeOrchestrator:
         state_manager.update_trade(request_id, execution_result, status=trade_status)
         state_manager.record_processed_result(request_id, final_result)
 
+        if trade_status == "FILLED":
+            self._metrics["successful_trades"] += 1
+        else:
+            self._metrics["failed_trades"] += 1
+
+        logger.info({"event": "trade_finalized", "request_id": request_id, "status": trade_status})
+
         return final_result
+
+    def reconcile_pending_trades(self, state_manager: TradeStateManager) -> None:
+        """
+        Startup recovery: resolve any trades stuck in PENDING status.
+        Stale trades (beyond timeout) are marked FAILED without broker query.
+        Recent trades are checked with the broker.
+        """
+
+        now = datetime.now(timezone.utc)
+        all_trades = state_manager.get_all_trades()
+        pending_trades = [t for t in all_trades if t.get("status") == "PENDING"]
+
+        logger.info({"event": "reconcile_start", "pending_count": len(pending_trades)})
+
+        for trade in pending_trades:
+            request_id = trade.get("request_id")
+            if not request_id:
+                logger.warning({"event": "reconcile_skip", "reason": "no request_id"})
+                continue
+
+            # Check for stale pending trades
+            created_at = trade.get("created_at")
+            if created_at:
+                created_time = datetime.fromisoformat(created_at)
+                elapsed = (now - created_time).total_seconds()
+
+                if elapsed > PENDING_TIMEOUT_SECONDS:
+                    state_manager.update_trade(
+                        request_id,
+                        {"execution_status": "TIMEOUT"},
+                        status="FAILED",
+                    )
+                    self._metrics["timeout_trades"] += 1
+                    self._metrics["failed_trades"] += 1
+
+                    logger.warning({
+                        "event": "reconcile_timeout",
+                        "request_id": request_id,
+                        "elapsed_seconds": round(elapsed),
+                    })
+                    continue
+
+            # Recent pending trade — query broker for actual status
+            try:
+                broker_response = self._broker.get_order_status(request_id)
+            except Exception as e:
+                logger.error({
+                    "event": "reconcile_broker_error",
+                    "request_id": request_id,
+                    "error_message": str(e),
+                })
+                continue
+
+            if broker_response.get("execution_status") == "Filled":
+                state_manager.update_trade(request_id, broker_response, status="FILLED")
+                logger.info({"event": "reconcile_update", "request_id": request_id, "status": "FILLED"})
+            else:
+                state_manager.update_trade(request_id, broker_response, status="FAILED")
+                logger.info({"event": "reconcile_update", "request_id": request_id, "status": "FAILED"})
+
+        logger.info({"event": "reconcile_complete"})

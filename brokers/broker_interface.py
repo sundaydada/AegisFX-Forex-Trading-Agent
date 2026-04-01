@@ -40,3 +40,20 @@ class BrokerInterface(ABC):
             Account balance as float.
         """
         pass
+
+    @abstractmethod
+    def get_order_status(self, request_id: str) -> Dict:
+        """
+        Check the status of a previously placed order.
+
+        Args:
+            request_id: The unique identifier for the trade request.
+
+        Returns:
+            Order status dict with at minimum:
+            {
+                "execution_status": str ("Filled", "Rejected", "Pending", "Unknown"),
+                ...additional broker-specific fields
+            }
+        """
+        pass

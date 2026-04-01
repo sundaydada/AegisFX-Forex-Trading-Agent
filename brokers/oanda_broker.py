@@ -162,3 +162,6 @@ class OandaBroker(BrokerInterface):
             raise RuntimeError(
                 f"Failed to parse balance value: {str(e)}"
             )
+
+    def get_order_status(self, request_id: str) -> Dict:
+        raise NotImplementedError("OANDA get_order_status not yet implemented")
