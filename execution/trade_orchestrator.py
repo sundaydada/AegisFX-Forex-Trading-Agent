@@ -262,11 +262,20 @@ class TradeOrchestrator:
                 elapsed = (now - created_time).total_seconds()
 
                 if elapsed > PENDING_TIMEOUT_SECONDS:
+                    timeout_result = {"execution_status": "TIMEOUT"}
                     state_manager.update_trade(
                         request_id,
-                        {"execution_status": "TIMEOUT"},
+                        timeout_result,
                         status="FAILED",
                     )
+
+                    if not state_manager.has_processed(request_id):
+                        state_manager.record_processed_result(request_id, {
+                            "approval_status": "Failed",
+                            "reason": "Reconciled after restart",
+                            "execution_result": timeout_result,
+                        })
+
                     self._metrics["timeout_trades"] += 1
                     self._metrics["failed_trades"] += 1
 
@@ -289,10 +298,21 @@ class TradeOrchestrator:
                 continue
 
             if broker_response.get("execution_status") == "Filled":
-                state_manager.update_trade(request_id, broker_response, status="FILLED")
-                logger.info({"event": "reconcile_update", "request_id": request_id, "status": "FILLED"})
+                reconcile_status = "FILLED"
+                approval = "Approved"
             else:
-                state_manager.update_trade(request_id, broker_response, status="FAILED")
-                logger.info({"event": "reconcile_update", "request_id": request_id, "status": "FAILED"})
+                reconcile_status = "FAILED"
+                approval = "Failed"
+
+            state_manager.update_trade(request_id, broker_response, status=reconcile_status)
+
+            if not state_manager.has_processed(request_id):
+                state_manager.record_processed_result(request_id, {
+                    "approval_status": approval,
+                    "reason": "Reconciled after restart",
+                    "execution_result": broker_response,
+                })
+
+            logger.info({"event": "reconcile_update", "request_id": request_id, "status": reconcile_status})
 
         logger.info({"event": "reconcile_complete"})
