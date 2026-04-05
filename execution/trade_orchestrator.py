@@ -20,6 +20,7 @@ class TradeOrchestrator:
         self._broker = broker
         self._trade_timestamps = []
         self._max_trades_per_minute = 5
+        self._failure_threshold = 0.5
         self._metrics = {
             "total_trades": 0,
             "successful_trades": 0,
@@ -27,6 +28,22 @@ class TradeOrchestrator:
             "timeout_trades": 0,
             "exception_trades": 0,
         }
+
+    def _trigger_alert(self, message: str) -> None:
+        logger.warning({"event": "alert", "message": message})
+        print(f"ALERT: {message}")
+
+    def _check_failure_rate(self) -> None:
+        total = self._metrics["total_trades"]
+        if total == 0:
+            return
+
+        failure_rate = self._metrics["failed_trades"] / total
+        if failure_rate > self._failure_threshold:
+            self._trigger_alert(
+                f"High failure rate detected: {failure_rate:.1%} "
+                f"({self._metrics['failed_trades']}/{total})"
+            )
 
     def get_metrics(self) -> Dict:
         return dict(self._metrics)
@@ -159,6 +176,9 @@ class TradeOrchestrator:
             self._metrics["failed_trades"] += 1
             self._metrics["exception_trades"] += 1
 
+            self._trigger_alert(f"Execution error for request_id: {request_id}")
+            self._check_failure_rate()
+
             logger.info({"event": "trade_finalized", "request_id": request_id, "status": "FAILED"})
 
             return final_result
@@ -191,6 +211,8 @@ class TradeOrchestrator:
             self._metrics["successful_trades"] += 1
         else:
             self._metrics["failed_trades"] += 1
+
+        self._check_failure_rate()
 
         logger.info({"event": "trade_finalized", "request_id": request_id, "status": trade_status})
 
