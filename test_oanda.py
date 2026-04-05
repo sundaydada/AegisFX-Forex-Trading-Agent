@@ -10,9 +10,9 @@ with open(".env") as f:
             os.environ[key.strip()] = value.strip()
 
 broker = OandaBroker(
-    api_key=os.getenv("OANDA_API_KEY"),
+    api_key=os.getenv("OANDA_DEMO_API_KEY"),
     account_id=os.getenv("OANDA_ACCOUNT_ID"),
-    base_url="https://api-fxtrade.oanda.com"
+    base_url="https://api-fxpractice.oanda.com"
 )
 
 print(broker.get_account_balance())
