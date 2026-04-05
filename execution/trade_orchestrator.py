@@ -21,6 +21,7 @@ class TradeOrchestrator:
         self._trade_timestamps = []
         self._max_trades_per_minute = 5
         self._failure_threshold = 0.5
+        self._min_trades_for_check = 3
         self._metrics = {
             "total_trades": 0,
             "successful_trades": 0,
@@ -84,6 +85,23 @@ class TradeOrchestrator:
             if trade.get("request_id") == request_id and trade.get("status") != "PENDING":
                 logger.info({"event": "crash_recovery_hit", "request_id": request_id})
                 return state_manager.get_processed_result(request_id)
+
+        # Circuit breaker check
+        total = self._metrics["total_trades"]
+        if total >= self._min_trades_for_check:
+            failure_rate = self._metrics["failed_trades"] / total
+            if failure_rate > self._failure_threshold:
+                self._trigger_alert("Circuit breaker activated")
+                logger.warning({
+                    "event": "circuit_breaker_triggered",
+                    "request_id": request_id,
+                    "failure_rate": round(failure_rate, 3),
+                })
+                return {
+                    "approval_status": "Rejected",
+                    "reason": "Circuit breaker triggered",
+                    "execution_result": None,
+                }
 
         # Rate limit check
         now = datetime.now(timezone.utc)
