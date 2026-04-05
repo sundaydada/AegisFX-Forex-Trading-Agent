@@ -160,4 +160,10 @@ try:
 except Exception:
     pass
 
+print(f"\nOutstanding PENDING trades: {pending}")
+if pending == 0:
+    print("INTEGRITY CHECK PASSED: All trades resolved")
+else:
+    print("INTEGRITY CHECK FAILED: Unresolved trades detected")
+
 state_manager.close()
