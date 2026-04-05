@@ -78,6 +78,13 @@ class OandaBroker(BrokerInterface):
                 "reason": reject.get("rejectReason", "Order rejected by broker"),
             }
 
+        if "orderCancelTransaction" in data:
+            cancel = data["orderCancelTransaction"]
+            return {
+                "execution_status": "Rejected",
+                "reason": cancel.get("reason", "Order cancelled by broker"),
+            }
+
         fill = data.get("orderFillTransaction")
         if not fill:
             return {
@@ -88,6 +95,7 @@ class OandaBroker(BrokerInterface):
         try:
             return {
                 "execution_status": "Filled",
+                "broker_order_id": fill.get("id", ""),
                 "currency_pair": order["currency_pair"],
                 "direction": order["direction"],
                 "units": abs(float(fill.get("units", 0))),
@@ -164,4 +172,62 @@ class OandaBroker(BrokerInterface):
             )
 
     def get_order_status(self, request_id: str) -> Dict:
-        raise NotImplementedError("OANDA get_order_status not yet implemented")
+        """
+        Look up a transaction by broker_order_id.
+        request_id here is expected to be the broker_order_id
+        stored in the trade record from place_order().
+        """
+
+        try:
+            data = self._make_request(f"/transactions/{request_id}")
+        except RuntimeError as e:
+            error_msg = str(e)
+            if "404" in error_msg:
+                return {
+                    "execution_status": "NOT_FOUND",
+                }
+            return {
+                "execution_status": "ERROR",
+                "error_message": error_msg,
+            }
+
+        transaction = data.get("transaction")
+        if not transaction:
+            return {
+                "execution_status": "NOT_FOUND",
+            }
+
+        tx_type = transaction.get("type", "")
+
+        if tx_type == "ORDER_FILL":
+            return {
+                "execution_status": "Filled",
+                "broker_order_id": transaction.get("id", ""),
+                "details": {
+                    "instrument": transaction.get("instrument", ""),
+                    "units": transaction.get("units", ""),
+                    "price": transaction.get("price", ""),
+                    "time": transaction.get("time", ""),
+                    "pl": transaction.get("pl", ""),
+                },
+            }
+
+        if tx_type in ("ORDER_CANCEL", "ORDER_CLIENT_EXTENSIONS_MODIFY"):
+            return {
+                "execution_status": "Cancelled",
+                "broker_order_id": transaction.get("id", ""),
+                "details": {
+                    "reason": transaction.get("reason", ""),
+                    "time": transaction.get("time", ""),
+                },
+            }
+
+        return {
+            "execution_status": "Rejected",
+            "broker_order_id": transaction.get("id", ""),
+            "details": {
+                "type": tx_type,
+                "reason": transaction.get("rejectReason", transaction.get("reason", "")),
+                "time": transaction.get("time", ""),
+            },
+        }
