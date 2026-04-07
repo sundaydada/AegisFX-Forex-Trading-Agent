@@ -31,6 +31,7 @@ class PersistentTradeStateManager:
         self._conn.commit()
 
     def record_trade(self, trade: Dict) -> None:
+        print("DEBUG: Writing trade to DB:", trade)
         self._conn.execute(
             "INSERT INTO trades (trade_json) VALUES (?)",
             (json.dumps(trade),),

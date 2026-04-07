@@ -65,6 +65,11 @@ class TradeOrchestrator:
         }
         """
 
+        total = self._metrics["total_trades"]
+        cb_active = (total >= self._min_trades_for_check and
+                     (self._metrics["failed_trades"] / total) > self._failure_threshold) if total > 0 else False
+        print("DEBUG: Circuit breaker state:", cb_active, "| Metrics:", self._metrics)
+
         logger.info({
             "event": "trade_received",
             "request_id": request_id,

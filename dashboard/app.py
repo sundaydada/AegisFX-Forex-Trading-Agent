@@ -34,6 +34,7 @@ DB_PATH = os.path.join(
     "dry_run_sustained.db",
 )
 
+print("DB PATH:", os.path.abspath(DB_PATH))
 state_manager = PersistentTradeStateManager(db_path=DB_PATH)
 all_trades = state_manager.get_all_trades()
 state_manager.close()

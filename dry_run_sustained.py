@@ -31,6 +31,7 @@ broker = OandaBroker(
     base_url="https://api-fxpractice.oanda.com",
 )
 
+print("DB PATH:", os.path.abspath(DB_PATH))
 state_manager = PersistentTradeStateManager(db_path=DB_PATH)
 orchestrator = TradeOrchestrator(broker)
 
