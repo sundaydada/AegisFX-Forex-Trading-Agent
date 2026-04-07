@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import streamlit as st
+import pandas as pd
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -78,7 +79,50 @@ else:
 
 st.divider()
 
-# --- Section C: Open Positions ---
+# --- Section C: Performance Charts ---
+st.subheader("Performance Charts")
+
+if all_trades:
+    chart_col1, chart_col2 = st.columns(2)
+
+    # A. Trade Outcomes Bar Chart
+    with chart_col1:
+        st.caption("Trade Outcomes")
+        outcomes_df = pd.DataFrame(
+            [{"Success": filled, "Failed": failed}]
+        )
+        st.bar_chart(outcomes_df, use_container_width=True)
+
+    # B. Trade Timeline Line Chart
+    with chart_col2:
+        st.caption("Trade Timeline (Cumulative)")
+
+        # Sort trades by created_at and build cumulative count
+        trades_with_time = [
+            t for t in all_trades if t.get("created_at")
+        ]
+        trades_with_time.sort(key=lambda t: t["created_at"])
+
+        if trades_with_time:
+            timeline_data = []
+            for i, t in enumerate(trades_with_time):
+                timeline_data.append({
+                    "Time": t["created_at"][:19],
+                    "Cumulative Trades": i + 1,
+                })
+
+            timeline_df = pd.DataFrame(timeline_data)
+            timeline_df["Time"] = pd.to_datetime(timeline_df["Time"])
+            timeline_df = timeline_df.set_index("Time")
+            st.line_chart(timeline_df, use_container_width=True)
+        else:
+            st.info("No timestamped trades yet.")
+else:
+    st.info("No trade data available for charts.")
+
+st.divider()
+
+# --- Section D: Open Positions ---
 st.subheader("Broker Open Positions")
 
 try:
