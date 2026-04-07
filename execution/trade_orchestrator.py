@@ -80,6 +80,7 @@ class TradeOrchestrator:
 
         # Idempotency check
         if state_manager.has_processed(request_id):
+            print(f"DEBUG: Idempotency hit for {request_id}")
             logger.info({"event": "idempotency_hit", "request_id": request_id})
             return state_manager.get_processed_result(request_id)
 
