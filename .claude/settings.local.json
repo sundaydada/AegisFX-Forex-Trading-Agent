@@ -2,10 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(python -c \":*)",
-      "Bash(python -m tests.test_orchestrator_scenarios)"
+      "Bash(python -m tests.test_orchestrator_scenarios)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)"
     ],
     "additionalDirectories": [
-      "C:\\Users\\Dell\\OneDrive"
+      "C:\\Users\\Dell\\OneDrive",
+      "c:\\Users\\Dell\\OneDrive\\COLABERRY INTERNSHIP\\AegisFX Forex Trading Agent"
     ]
   }
 }
