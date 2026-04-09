@@ -28,6 +28,67 @@ st.set_page_config(
 
 st.title("AegisFX Trading Dashboard")
 
+# --- Connect to broker (used by multiple panels) ---
+broker = None
+balance = 0.0
+positions = []
+try:
+    broker = OandaBroker(
+        api_key=os.getenv("OANDA_DEMO_API_KEY", ""),
+        account_id=os.getenv("OANDA_ACCOUNT_ID", ""),
+        base_url="https://api-fxpractice.oanda.com",
+    )
+    balance = broker.get_account_balance()
+    positions = broker.get_open_positions()
+except Exception:
+    pass
+
+# --- P&L Panel (Top, Full Width, Dominant) ---
+unrealized_pnl = sum(p.get("unrealized_pl", 0.0) for p in positions)
+equity = balance + unrealized_pnl
+peak_equity = max(equity, balance)
+drawdown_pct = ((peak_equity - equity) / peak_equity * 100) if peak_equity > 0 else 0.0
+
+# Action signal
+if drawdown_pct >= 4.0:
+    signal_text = "DRAWDOWN WARNING"
+    signal_color = "red"
+    pnl_color = "#FF4444"
+elif unrealized_pnl < 0:
+    signal_text = "LOSS"
+    signal_color = "orange"
+    pnl_color = "#FFAA00"
+else:
+    signal_text = "PROFIT"
+    signal_color = "green"
+    pnl_color = "#00CC66"
+
+pnl_sign = "+" if unrealized_pnl >= 0 else ""
+
+st.markdown(
+    f"""
+    <div style="text-align:center; padding: 20px; border-radius: 10px;
+                border: 2px solid {pnl_color}; margin-bottom: 20px;">
+        <span style="background-color:{pnl_color}; color:white; padding:4px 16px;
+                     border-radius:4px; font-size:14px; font-weight:bold;">
+            {signal_text}
+        </span>
+        <div style="font-size:48px; font-weight:bold; color:{pnl_color}; margin:10px 0;">
+            {pnl_sign}${unrealized_pnl:,.2f}
+        </div>
+        <div style="font-size:14px; color:#888;">Unrealized P&L</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+pnl_col1, pnl_col2, pnl_col3 = st.columns(3)
+pnl_col1.metric("Account Balance", f"${balance:,.2f}")
+pnl_col2.metric("Drawdown from Peak", f"{drawdown_pct:.2f}%")
+pnl_col3.metric("Equity", f"${equity:,.2f}")
+
+st.divider()
+
 # --- Connect to state ---
 DB_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -126,34 +187,21 @@ st.divider()
 # --- Section D: Open Positions ---
 st.subheader("Broker Open Positions")
 
-try:
-    broker = OandaBroker(
-        api_key=os.getenv("OANDA_DEMO_API_KEY", ""),
-        account_id=os.getenv("OANDA_ACCOUNT_ID", ""),
-        base_url="https://api-fxpractice.oanda.com",
-    )
-
-    positions = broker.get_open_positions()
-    balance = broker.get_account_balance()
-
-    st.metric("Account Balance", f"${balance:,.2f}")
-
-    if positions:
-        pos_data = []
-        for p in positions:
-            pos_data.append({
-                "Pair": p.get("currency_pair", ""),
-                "Direction": p.get("direction", ""),
-                "Units": p.get("units", ""),
-                "Avg Price": p.get("average_price", ""),
-                "Unrealized P&L": p.get("unrealized_pl", ""),
-            })
-        st.dataframe(pos_data, use_container_width=True)
-    else:
-        st.info("No open positions.")
-
-except Exception as e:
-    st.error(f"Broker connection error: {e}")
+if positions:
+    pos_data = []
+    for p in positions:
+        pos_data.append({
+            "Pair": p.get("currency_pair", ""),
+            "Direction": p.get("direction", ""),
+            "Units": p.get("units", ""),
+            "Avg Price": p.get("average_price", ""),
+            "Unrealized P&L": p.get("unrealized_pl", ""),
+        })
+    st.dataframe(pos_data, use_container_width=True)
+elif broker:
+    st.info("No open positions.")
+else:
+    st.error("Broker not connected.")
 
 # --- Auto-refresh ---
 time.sleep(2)
