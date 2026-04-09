@@ -44,24 +44,26 @@ except Exception:
     pass
 
 # --- P&L Panel (Top, Full Width, Dominant) ---
+# NOTE: Dollar P&L sourced from broker until get_metrics() tracks dollar values.
+# Broker data is supplemental — metrics remain source of truth for trade counts.
 unrealized_pnl = sum(p.get("unrealized_pl", 0.0) for p in positions)
 equity = balance + unrealized_pnl
 peak_equity = max(equity, balance)
 drawdown_pct = ((peak_equity - equity) / peak_equity * 100) if peak_equity > 0 else 0.0
 
-# Action signal
+# Action signal — drawdown overrides P&L (systemic health > current moment)
 if drawdown_pct >= 4.0:
     signal_text = "DRAWDOWN WARNING"
     signal_color = "red"
     pnl_color = "#FF4444"
-elif unrealized_pnl < 0:
-    signal_text = "LOSS"
-    signal_color = "orange"
-    pnl_color = "#FFAA00"
-else:
+elif unrealized_pnl > 0:
     signal_text = "PROFIT"
     signal_color = "green"
     pnl_color = "#00CC66"
+else:
+    signal_text = "LOSS"
+    signal_color = "orange"
+    pnl_color = "#FFAA00"
 
 pnl_sign = "+" if unrealized_pnl >= 0 else ""
 
