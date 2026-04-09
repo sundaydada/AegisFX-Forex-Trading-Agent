@@ -192,17 +192,26 @@ st.subheader("Current Positions")
 filled_trades = [t for t in all_trades if t.get("status") == "FILLED"]
 
 if filled_trades:
-    # Build broker lookup for live enrichment (pair+direction -> broker data)
+    # Build broker lookup for live enrichment (pair+direction -> list of matches)
     broker_lookup = {}
     for p in positions:
         key = (p.get("currency_pair", ""), p.get("direction", ""))
-        broker_lookup[key] = p
+        broker_lookup.setdefault(key, []).append(p)
 
     pos_data = []
     for t in filled_trades:
         pair = t.get("currency_pair", "")
         direction = t.get("direction", "")
-        broker_match = broker_lookup.get((pair, direction))
+        matches = broker_lookup.get((pair, direction), [])
+
+        if len(matches) == 1:
+            current_price = matches[0].get("average_price", "-")
+            unrealized_pl = matches[0].get("unrealized_pl", "-")
+        else:
+            if len(matches) > 1:
+                print(f"WARNING: Multiple broker positions for {pair} {direction}, skipping enrichment")
+            current_price = "-"
+            unrealized_pl = "-"
 
         pos_data.append({
             "Request ID": t.get("request_id", ""),
@@ -210,8 +219,8 @@ if filled_trades:
             "Direction": direction,
             "Units": t.get("position_size", t.get("units", "")),
             "Entry Price": t.get("fill_price", ""),
-            "Current Price": broker_match.get("average_price", "-") if broker_match else "-",
-            "Unrealized P&L": broker_match.get("unrealized_pl", "-") if broker_match else "-",
+            "Current Price": current_price,
+            "Unrealized P&L": unrealized_pl,
         })
 
     st.dataframe(pos_data, use_container_width=True)
