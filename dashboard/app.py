@@ -186,24 +186,37 @@ else:
 
 st.divider()
 
-# --- Section D: Open Positions ---
-st.subheader("Broker Open Positions")
+# --- Section D: Current Positions (State Manager = source of truth) ---
+st.subheader("Current Positions")
 
-if positions:
-    pos_data = []
+filled_trades = [t for t in all_trades if t.get("status") == "FILLED"]
+
+if filled_trades:
+    # Build broker lookup for live enrichment (pair+direction -> broker data)
+    broker_lookup = {}
     for p in positions:
+        key = (p.get("currency_pair", ""), p.get("direction", ""))
+        broker_lookup[key] = p
+
+    pos_data = []
+    for t in filled_trades:
+        pair = t.get("currency_pair", "")
+        direction = t.get("direction", "")
+        broker_match = broker_lookup.get((pair, direction))
+
         pos_data.append({
-            "Pair": p.get("currency_pair", ""),
-            "Direction": p.get("direction", ""),
-            "Units": p.get("units", ""),
-            "Avg Price": p.get("average_price", ""),
-            "Unrealized P&L": p.get("unrealized_pl", ""),
+            "Request ID": t.get("request_id", ""),
+            "Pair": pair,
+            "Direction": direction,
+            "Units": t.get("position_size", t.get("units", "")),
+            "Entry Price": t.get("fill_price", ""),
+            "Current Price": broker_match.get("average_price", "-") if broker_match else "-",
+            "Unrealized P&L": broker_match.get("unrealized_pl", "-") if broker_match else "-",
         })
+
     st.dataframe(pos_data, use_container_width=True)
-elif broker:
-    st.info("No open positions.")
 else:
-    st.error("Broker not connected.")
+    st.info("No open positions.")
 
 # --- Auto-refresh ---
 time.sleep(2)
