@@ -1,4 +1,5 @@
 from typing import List, Dict
+from datetime import datetime, timezone
 
 
 class TradeStateManager:
@@ -30,6 +31,13 @@ class TradeStateManager:
             if trade.get("request_id") == request_id and trade.get("status") == "PENDING":
                 trade.update(execution_result)
                 trade["status"] = status
+                return
+
+    def close_trade(self, request_id: str) -> None:
+        for trade in self._trades:
+            if trade.get("request_id") == request_id and trade.get("status") == "FILLED":
+                trade["status"] = "CLOSED"
+                trade["closed_at"] = datetime.now(timezone.utc).isoformat()
                 return
 
     def has_processed(self, request_id: str) -> bool:

@@ -1,6 +1,7 @@
 import sqlite3
 import json
 from typing import List, Dict
+from datetime import datetime, timezone
 
 
 class PersistentTradeStateManager:
@@ -58,6 +59,24 @@ class PersistentTradeStateManager:
             if trade.get("status") == "PENDING":
                 trade.update(execution_result)
                 trade["status"] = status
+                self._conn.execute(
+                    "UPDATE trades SET trade_json = ? WHERE id = ?",
+                    (json.dumps(trade), row[0]),
+                )
+                self._conn.commit()
+                return
+
+    def close_trade(self, request_id: str) -> None:
+        cursor = self._conn.execute(
+            "SELECT id, trade_json FROM trades WHERE trade_json LIKE ?",
+            (f'%"request_id": "{request_id}"%',),
+        )
+
+        for row in cursor:
+            trade = json.loads(row[1])
+            if trade.get("status") == "FILLED":
+                trade["status"] = "CLOSED"
+                trade["closed_at"] = datetime.now(timezone.utc).isoformat()
                 self._conn.execute(
                     "UPDATE trades SET trade_json = ? WHERE id = ?",
                     (json.dumps(trade), row[0]),
