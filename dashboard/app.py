@@ -235,10 +235,72 @@ with ai_col:
     st.metric("Active Strategy", ai_state["strategy"])
     st.metric("Model Confidence", f"{ai_state['confidence']}%")
 
-# --- Right: Alerts / System Status (placeholder) ---
+# --- Right: Alerts / System Status ---
 with alerts_col:
     st.subheader("Alerts / System Status")
-    st.info("Alerts panel coming soon.")
+
+    # Compute system health indicators
+    total_trades = len(all_trades)
+    failed_trades = sum(1 for t in all_trades if t.get("status") == "FAILED")
+    pending_count = sum(1 for t in all_trades if t.get("status") == "PENDING")
+
+    failure_threshold = 0.5
+    min_trades_for_check = 3
+    circuit_breaker_active = (
+        total_trades >= min_trades_for_check
+        and (failed_trades / total_trades) > failure_threshold
+    ) if total_trades > 0 else False
+
+    broker_connected = broker is not None
+
+    # Last successful trade timestamp
+    filled_timestamps = [
+        t.get("created_at", "") for t in all_trades if t.get("status") == "FILLED"
+    ]
+    last_success = max(filled_timestamps)[:19] if filled_timestamps else "None"
+
+    # Rate limit — static max (dashboard doesn't share orchestrator state)
+    max_trades_per_minute = 5
+    rate_remaining = max(0, max_trades_per_minute - total_trades) if total_trades < max_trades_per_minute else 0
+
+    # Panel background color — worst active condition wins
+    if circuit_breaker_active or not broker_connected:
+        panel_bg = "#FF4444"
+    elif pending_count > 0:
+        panel_bg = "#FFAA00"
+    else:
+        panel_bg = "#00CC66"
+
+    st.markdown(
+        f"""
+        <div style="background-color:{panel_bg}; color:white; padding:8px 12px;
+                     border-radius:4px; font-size:14px; font-weight:bold; text-align:center;">
+            {"SYSTEM ALERT" if panel_bg != "#00CC66" else "ALL CLEAR"}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.metric("Circuit Breaker", "ACTIVE" if circuit_breaker_active else "INACTIVE")
+    st.metric("Broker Connection", "CONNECTED" if broker_connected else "DISCONNECTED")
+    st.metric("Pending Trades", pending_count)
+    st.metric("Last Successful Trade", last_success)
+
+    # Recent alerts — derived from current state
+    alerts = []
+    if circuit_breaker_active:
+        alerts.append("Circuit breaker is ACTIVE — trading halted")
+    if not broker_connected:
+        alerts.append("Broker DISCONNECTED — no live data")
+    if pending_count > 0:
+        alerts.append(f"{pending_count} trade(s) stuck in PENDING")
+
+    if alerts:
+        st.caption("Active Alerts")
+        for alert in alerts[-3:]:
+            st.warning(alert)
+    else:
+        st.caption("No active alerts")
 
 # --- Auto-refresh ---
 time.sleep(2)
