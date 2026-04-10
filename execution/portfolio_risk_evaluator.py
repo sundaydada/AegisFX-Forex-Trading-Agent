@@ -13,6 +13,7 @@ class PortfolioRiskEvaluator:
         current_trades: List[Dict],
         proposed_trade: Dict,
         max_currency_exposure: float,
+        max_total_exposure: float = 10.0,
     ) -> Dict:
         """
         Returns:
@@ -36,12 +37,21 @@ class PortfolioRiskEvaluator:
             hypothetical_trades
         )
 
+        # Check per-currency limits
         for currency, exposure in currency_exposure.items():
             if abs(exposure) > max_currency_exposure:
                 return {
                     "approval_status": "Rejected",
                     "reason": f"{currency} exposure limit breached",
                 }
+
+        # Check total portfolio exposure limit
+        total_exposure = sum(abs(v) for v in currency_exposure.values())
+        if total_exposure > max_total_exposure:
+            return {
+                "approval_status": "Rejected",
+                "reason": f"Total portfolio exposure limit breached ({total_exposure:.1f} > {max_total_exposure:.1f})",
+            }
 
         return {
             "approval_status": "Approved",
