@@ -1,6 +1,7 @@
 import os
 import time
 import random
+import uuid
 from datetime import datetime, timezone
 from brokers.oanda_broker import OandaBroker
 from execution.persistent_trade_state_manager import PersistentTradeStateManager
@@ -78,7 +79,7 @@ try:
         pair = random.choice(PAIRS)
         direction = random.choice(DIRECTIONS)
         trade_counter += 1
-        request_id = f"SUSTAINED-{trade_counter:04d}"
+        request_id = f"SUSTAINED-{uuid.uuid4()}"
 
         proposed_trade = {
             "currency_pair": pair,
