@@ -8,7 +8,10 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from execution.persistent_trade_state_manager import PersistentTradeStateManager
+from execution.risk_exposure import compute_risk_exposure
 from brokers.oanda_broker import OandaBroker
+
+MAX_ALLOWED_EXPOSURE = 10.0
 
 # Load .env
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
@@ -102,130 +105,93 @@ state_manager = PersistentTradeStateManager(db_path=DB_PATH)
 all_trades = state_manager.get_all_trades()
 state_manager.close()
 
-# --- Compute Metrics ---
-total = len(all_trades)
-filled = sum(1 for t in all_trades if t.get("status") == "FILLED")
-failed = sum(1 for t in all_trades if t.get("status") == "FAILED")
-pending = sum(1 for t in all_trades if t.get("status") == "PENDING")
-failure_rate = (failed / total * 100) if total > 0 else 0.0
-
-# --- Section A: Metrics ---
-st.subheader("System Metrics")
-
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Total Trades", total)
-col2.metric("Successful", filled)
-col3.metric("Failed", failed)
-col4.metric("Pending", pending)
-col5.metric("Failure Rate", f"{failure_rate:.1f}%")
-
-st.divider()
-
-# --- Section B: Trade Table ---
-st.subheader("Trade Ledger")
-
-if all_trades:
-    table_data = []
-    for t in all_trades:
-        table_data.append({
-            "Request ID": t.get("request_id", ""),
-            "Pair": t.get("currency_pair", ""),
-            "Direction": t.get("direction", ""),
-            "Size": t.get("position_size", ""),
-            "Status": t.get("status", ""),
-            "Exec Status": t.get("execution_status", ""),
-            "Fill Price": t.get("fill_price", ""),
-            "Created": t.get("created_at", ""),
-        })
-    st.dataframe(table_data, use_container_width=True)
-else:
-    st.info("No trades recorded yet. Start a dry run to see data.")
-
-st.divider()
-
-# --- Section C: Performance Charts ---
-st.subheader("Performance Charts")
-
-if all_trades:
-    chart_col1, chart_col2 = st.columns(2)
-
-    # A. Trade Outcomes Bar Chart
-    with chart_col1:
-        st.caption("Trade Outcomes")
-        outcomes_df = pd.DataFrame(
-            [{"Success": filled, "Failed": failed}]
-        )
-        st.bar_chart(outcomes_df, use_container_width=True)
-
-    # B. Trade Timeline Line Chart
-    with chart_col2:
-        st.caption("Trade Timeline (Cumulative)")
-
-        # Sort trades by created_at and build cumulative count
-        trades_with_time = [
-            t for t in all_trades if t.get("created_at")
-        ]
-        trades_with_time.sort(key=lambda t: t["created_at"])
-
-        if trades_with_time:
-            timeline_data = []
-            for i, t in enumerate(trades_with_time):
-                timeline_data.append({
-                    "Time": t["created_at"][:19],
-                    "Cumulative Trades": i + 1,
-                })
-
-            timeline_df = pd.DataFrame(timeline_data)
-            timeline_df["Time"] = pd.to_datetime(timeline_df["Time"])
-            timeline_df = timeline_df.set_index("Time")
-            st.line_chart(timeline_df, use_container_width=True)
-        else:
-            st.info("No timestamped trades yet.")
-else:
-    st.info("No trade data available for charts.")
-
-st.divider()
-
-# --- Section D: Current Positions (State Manager = source of truth) ---
-st.subheader("Current Positions")
-
+# --- Section B: Current Positions + Risk Exposure (side-by-side) ---
 filled_trades = [t for t in all_trades if t.get("status") == "FILLED"]
 
-if filled_trades:
-    # Build broker lookup for live enrichment (pair+direction -> list of matches)
-    broker_lookup = {}
-    for p in positions:
-        key = (p.get("currency_pair", ""), p.get("direction", ""))
-        broker_lookup.setdefault(key, []).append(p)
+pos_col, risk_col = st.columns(2)
 
-    pos_data = []
-    for t in filled_trades:
-        pair = t.get("currency_pair", "")
-        direction = t.get("direction", "")
-        matches = broker_lookup.get((pair, direction), [])
+# --- Left: Current Positions ---
+with pos_col:
+    st.subheader("Current Positions")
 
-        if len(matches) == 1:
-            current_price = matches[0].get("average_price", "-")
-            unrealized_pl = matches[0].get("unrealized_pl", "-")
-        else:
-            if len(matches) > 1:
-                print(f"WARNING: Multiple broker positions for {pair} {direction}, skipping enrichment")
-            current_price = "-"
-            unrealized_pl = "-"
+    if filled_trades:
+        # Build broker lookup for live enrichment (pair+direction -> list of matches)
+        broker_lookup = {}
+        for p in positions:
+            key = (p.get("currency_pair", ""), p.get("direction", ""))
+            broker_lookup.setdefault(key, []).append(p)
 
-        pos_data.append({
-            "Request ID": t.get("request_id", ""),
-            "Pair": pair,
-            "Direction": direction,
-            "Units": t.get("position_size", t.get("units", "")),
-            "Entry Price": t.get("fill_price", ""),
-            "Current Price": current_price,
-            "Unrealized P&L": unrealized_pl,
-        })
+        pos_data = []
+        for t in filled_trades:
+            pair = t.get("currency_pair", "")
+            direction = t.get("direction", "")
+            matches = broker_lookup.get((pair, direction), [])
 
-    st.dataframe(pos_data, use_container_width=True)
-else:
-    st.info("No open positions.")
+            if len(matches) == 1:
+                current_price = matches[0].get("average_price", "-")
+                unrealized_pl = matches[0].get("unrealized_pl", "-")
+            else:
+                if len(matches) > 1:
+                    print(f"WARNING: Multiple broker positions for {pair} {direction}, skipping enrichment")
+                current_price = "-"
+                unrealized_pl = "-"
+
+            pos_data.append({
+                "Request ID": t.get("request_id", ""),
+                "Pair": pair,
+                "Direction": direction,
+                "Units": t.get("position_size", t.get("units", "")),
+                "Entry Price": t.get("fill_price", ""),
+                "Current Price": current_price,
+                "Unrealized P&L": unrealized_pl,
+            })
+
+        st.dataframe(pos_data, use_container_width=True)
+    else:
+        st.info("No open positions.")
+
+# --- Right: Risk Exposure ---
+with risk_col:
+    st.subheader("Risk Exposure")
+
+    net_exposure, total_exposure, utilization_pct = compute_risk_exposure(
+        filled_trades, max_allowed_exposure=MAX_ALLOWED_EXPOSURE
+    )
+
+    # Action signal
+    if utilization_pct > 90:
+        risk_signal = "CRITICAL"
+        risk_color = "#FF4444"
+    elif utilization_pct > 70:
+        risk_signal = "HIGH"
+        risk_color = "#FF8800"
+    elif utilization_pct > 40:
+        risk_signal = "MEDIUM"
+        risk_color = "#FFAA00"
+    else:
+        risk_signal = "LOW"
+        risk_color = "#00CC66"
+
+    st.markdown(
+        f"""
+        <span style="background-color:{risk_color}; color:white; padding:4px 12px;
+                     border-radius:4px; font-size:14px; font-weight:bold;">
+            {risk_signal}
+        </span>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.metric("Total Exposure", f"{total_exposure:.1f}")
+    st.metric("Max Allowed", f"{MAX_ALLOWED_EXPOSURE:.1f}")
+    st.metric("Utilization", f"{utilization_pct:.1f}%")
+
+    if net_exposure:
+        st.caption("Net Exposure by Currency")
+        exposure_data = [{"Currency": k, "Exposure": v} for k, v in net_exposure.items()]
+        st.dataframe(exposure_data, use_container_width=True)
+    else:
+        st.info("No exposure data.")
 
 # --- Auto-refresh ---
 time.sleep(2)
