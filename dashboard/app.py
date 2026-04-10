@@ -193,6 +193,53 @@ with risk_col:
     else:
         st.info("No exposure data.")
 
+st.divider()
+
+# --- Section C: AI Agreement + Alerts (side-by-side) ---
+ai_col, alerts_col = st.columns(2)
+
+# --- Left: AI Agreement ---
+with ai_col:
+    st.subheader("AI Agreement")
+
+    # Mock data — replace with get_ai_state() when agents are live
+    ai_state = {
+        "regime": "Trending",
+        "strategy": "Momentum_v1",
+        "confidence": 72,
+        "agents_agree": True,
+    }
+
+    # Action signal
+    if ai_state["agents_agree"] and ai_state["confidence"] > 70:
+        ai_signal = "STRONG"
+        ai_color = "#00CC66"
+    elif ai_state["agents_agree"] and ai_state["confidence"] < 50:
+        ai_signal = "WEAK"
+        ai_color = "#FFAA00"
+    else:
+        ai_signal = "DIVERGING"
+        ai_color = "#FF4444"
+
+    st.markdown(
+        f"""
+        <span style="background-color:{ai_color}; color:white; padding:4px 12px;
+                     border-radius:4px; font-size:14px; font-weight:bold;">
+            {ai_signal}
+        </span>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.metric("Current Regime", ai_state["regime"])
+    st.metric("Active Strategy", ai_state["strategy"])
+    st.metric("Model Confidence", f"{ai_state['confidence']}%")
+
+# --- Right: Alerts / System Status (placeholder) ---
+with alerts_col:
+    st.subheader("Alerts / System Status")
+    st.info("Alerts panel coming soon.")
+
 # --- Auto-refresh ---
 time.sleep(2)
 st.rerun()
