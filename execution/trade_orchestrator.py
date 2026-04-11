@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from brokers.broker_interface import BrokerInterface
 from execution.trade_state_manager import TradeStateManager
 from execution.portfolio_risk_evaluator import PortfolioRiskEvaluator
+from execution.position_netting import net_position
 
 PENDING_TIMEOUT_SECONDS = 60
 
@@ -131,7 +132,35 @@ class TradeOrchestrator:
         self._trade_timestamps.append(now)
         self._metrics["total_trades"] += 1
 
-        # Step 1: Risk Evaluation
+        # Step 1: Position netting (BEFORE risk evaluation)
+        remaining_size, closed_count = net_position(state_manager, proposed_trade)
+
+        logger.info({
+            "event": "position_netting",
+            "request_id": request_id,
+            "original_size": proposed_trade.get("approved_position_size"),
+            "remaining_size": remaining_size,
+            "closed_count": closed_count,
+        })
+
+        if remaining_size == 0.0:
+            result = {
+                "approval_status": "Netted",
+                "reason": f"Fully netted against {closed_count} existing position(s)",
+                "execution_result": None,
+            }
+            state_manager.record_processed_result(request_id, result)
+            self._metrics["successful_trades"] += 1
+            logger.info({"event": "trade_finalized", "request_id": request_id, "status": "NETTED"})
+            return result
+
+        # Update proposed trade with netted size
+        proposed_trade = dict(proposed_trade)
+        proposed_trade["approved_position_size"] = remaining_size
+
+        # Step 2: Risk Evaluation (on reduced size)
+        current_trades = state_manager.get_all_trades()
+
         risk_decision = PortfolioRiskEvaluator.evaluate_trade(
             current_trades=current_trades,
             proposed_trade=proposed_trade,
@@ -154,7 +183,7 @@ class TradeOrchestrator:
             state_manager.record_processed_result(request_id, result)
             return result
 
-        # Step 2: Record pending trade before broker call
+        # Step 3: Record pending trade before broker call
         pending_trade = {
             "request_id": request_id,
             "currency_pair": proposed_trade["currency_pair"],
