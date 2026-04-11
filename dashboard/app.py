@@ -32,6 +32,8 @@ st.set_page_config(
 st.title("AegisFX Trading Dashboard")
 
 # --- Connect to broker (used by multiple panels) ---
+from brokers.broker_health import BrokerHealthMonitor
+broker_health = BrokerHealthMonitor()
 broker = None
 balance = 0.0
 positions = []
@@ -40,11 +42,14 @@ try:
         api_key=os.getenv("OANDA_DEMO_API_KEY", ""),
         account_id=os.getenv("OANDA_ACCOUNT_ID", ""),
         base_url="https://api-fxpractice.oanda.com",
+        health=broker_health,
     )
     balance = broker.get_account_balance()
     positions = broker.get_open_positions()
 except Exception:
     pass
+
+broker_connected = broker_health.connected
 
 # --- P&L Panel (Top, Full Width, Dominant) ---
 # NOTE: Dollar P&L sourced from broker until get_metrics() tracks dollar values.
@@ -250,8 +255,6 @@ with alerts_col:
         total_trades >= min_trades_for_check
         and (failed_trades / total_trades) > failure_threshold
     ) if total_trades > 0 else False
-
-    broker_connected = broker is not None
 
     # Last successful trade timestamp
     filled_timestamps = [

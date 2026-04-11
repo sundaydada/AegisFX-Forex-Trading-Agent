@@ -2,6 +2,7 @@ import urllib.request
 import json
 from typing import Dict, List
 from brokers.broker_interface import BrokerInterface
+from brokers.broker_health import BrokerHealthMonitor
 
 
 class OandaBroker(BrokerInterface):
@@ -10,10 +11,11 @@ class OandaBroker(BrokerInterface):
     Conforms to BrokerInterface contract.
     """
 
-    def __init__(self, api_key: str, account_id: str, base_url: str):
+    def __init__(self, api_key: str, account_id: str, base_url: str, health: BrokerHealthMonitor = None):
         self._api_key = api_key
         self._account_id = account_id
         self._base_url = base_url
+        self.health = health or BrokerHealthMonitor()
 
     def _make_request(self, endpoint: str, method: str = "GET", body: Dict = None) -> Dict:
         url = f"{self._base_url}/v3/accounts/{self._account_id}{endpoint}"
@@ -28,13 +30,17 @@ class OandaBroker(BrokerInterface):
 
         try:
             with urllib.request.urlopen(req, data, timeout=10) as response:
-                return json.loads(response.read().decode("utf-8"))
+                result = json.loads(response.read().decode("utf-8"))
+                self.health.report_success()
+                return result
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8") if e.fp else ""
+            self.health.report_failure(f"API error {e.code}: {error_body}")
             raise RuntimeError(
                 f"OANDA API error {e.code}: {error_body}"
             )
         except urllib.error.URLError as e:
+            self.health.report_failure(f"Connection error: {str(e.reason)}")
             raise RuntimeError(
                 f"OANDA connection error: {str(e.reason)}"
             )

@@ -194,7 +194,34 @@ class TradeOrchestrator:
         }
         state_manager.record_trade(pending_trade)
 
-        # Step 3: Execute Trade via broker
+        # Step 4: Check broker health before execution
+        if hasattr(self._broker, 'health') and not self._broker.health.connected:
+            logger.warning({
+                "event": "broker_disconnected_block",
+                "request_id": request_id,
+            })
+
+            execution_result = {
+                "execution_status": "ERROR",
+                "error_message": "Execution blocked: broker disconnected",
+            }
+
+            final_result = {
+                "approval_status": "Failed",
+                "reason": "Broker disconnected",
+                "execution_result": execution_result,
+            }
+
+            state_manager.update_trade(request_id, execution_result, status="FAILED")
+            state_manager.record_processed_result(request_id, final_result)
+
+            self._metrics["failed_trades"] += 1
+            self._metrics["exception_trades"] += 1
+
+            logger.info({"event": "trade_finalized", "request_id": request_id, "status": "FAILED"})
+            return final_result
+
+        # Step 5: Execute Trade via broker
         order = {
             "currency_pair": proposed_trade["currency_pair"],
             "direction": proposed_trade["direction"],
