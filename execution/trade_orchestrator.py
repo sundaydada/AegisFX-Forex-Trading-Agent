@@ -5,6 +5,7 @@ from brokers.broker_interface import BrokerInterface
 from execution.trade_state_manager import TradeStateManager
 from execution.portfolio_risk_evaluator import PortfolioRiskEvaluator
 from execution.position_netting import net_position
+from execution.trading_control import is_trading_enabled
 
 PENDING_TIMEOUT_SECONDS = 60
 
@@ -221,7 +222,33 @@ class TradeOrchestrator:
             logger.info({"event": "trade_finalized", "request_id": request_id, "status": "FAILED"})
             return final_result
 
-        # Step 5: Execute Trade via broker
+        # Step 5: Check operator trading control
+        if not is_trading_enabled():
+            logger.warning({
+                "event": "trading_disabled_block",
+                "request_id": request_id,
+            })
+
+            execution_result = {
+                "execution_status": "BLOCKED",
+                "error_message": "Trading disabled by operator",
+            }
+
+            final_result = {
+                "approval_status": "Failed",
+                "reason": "Trading disabled by operator",
+                "execution_result": execution_result,
+            }
+
+            state_manager.update_trade(request_id, execution_result, status="FAILED")
+            state_manager.record_processed_result(request_id, final_result)
+
+            self._metrics["failed_trades"] += 1
+
+            logger.info({"event": "trade_finalized", "request_id": request_id, "status": "BLOCKED"})
+            return final_result
+
+        # Step 6: Execute Trade via broker
         order = {
             "currency_pair": proposed_trade["currency_pair"],
             "direction": proposed_trade["direction"],

@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from execution.persistent_trade_state_manager import PersistentTradeStateManager
 from execution.risk_exposure import compute_risk_exposure
+from execution.trading_control import is_trading_enabled, set_trading_enabled
 from brokers.oanda_broker import OandaBroker
 
 MAX_ALLOWED_EXPOSURE = 10.0
@@ -244,6 +245,13 @@ with ai_col:
 with alerts_col:
     st.subheader("Alerts / System Status")
 
+    # Operator trading control
+    trading_on = is_trading_enabled()
+    new_state = st.toggle("Trading Enabled", value=trading_on, key="trading_toggle")
+    if new_state != trading_on:
+        set_trading_enabled(new_state)
+        st.rerun()
+
     # Compute system health indicators
     total_trades = len(all_trades)
     failed_trades = sum(1 for t in all_trades if t.get("status") == "FAILED")
@@ -267,7 +275,7 @@ with alerts_col:
     rate_remaining = max(0, max_trades_per_minute - total_trades) if total_trades < max_trades_per_minute else 0
 
     # Panel background color — worst active condition wins
-    if circuit_breaker_active or not broker_connected:
+    if circuit_breaker_active or not broker_connected or not new_state:
         panel_bg = "#FF4444"
     elif pending_count > 0:
         panel_bg = "#FFAA00"
@@ -291,6 +299,8 @@ with alerts_col:
 
     # Recent alerts — derived from current state
     alerts = []
+    if not new_state:
+        alerts.append("Trading DISABLED by operator")
     if circuit_breaker_active:
         alerts.append("Circuit breaker is ACTIVE — trading halted")
     if not broker_connected:
