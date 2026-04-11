@@ -110,7 +110,6 @@ DB_PATH = os.path.join(
 print("DB PATH:", os.path.abspath(DB_PATH))
 state_manager = PersistentTradeStateManager(db_path=DB_PATH)
 all_trades = state_manager.get_all_trades()
-state_manager.close()
 
 # --- Performance KPIs ---
 perf = compute_performance_metrics(all_trades)
@@ -165,6 +164,75 @@ with pos_col:
             })
 
         st.dataframe(pos_data, use_container_width=True)
+
+        # Close All button
+        if st.button("Close All Positions", type="primary"):
+            close_errors = []
+            for t in filled_trades:
+                rid = t.get("request_id")
+                pair = t.get("currency_pair", "")
+                direction = t.get("direction", "")
+                units = float(t.get("position_size", t.get("units", 0)))
+
+                if not rid or not broker:
+                    continue
+
+                print(f"Closing position at broker: {rid} | {pair} {direction} {units}")
+                result = broker.close_position(pair, units, direction)
+
+                if result.get("status") == "SUCCESS":
+                    print(f"Broker close SUCCESS: {rid}")
+                    state_manager.close_trade(rid)
+                    print(f"State updated to CLOSED: {rid}")
+                else:
+                    print(f"Broker close FAILED: {rid} — {result.get('reason')}")
+                    close_errors.append(f"{pair}: {result.get('reason')}")
+
+            if close_errors:
+                for err in close_errors:
+                    st.error(f"Close failed: {err}")
+            else:
+                st.rerun()
+
+        # Per-pair close buttons
+        open_pairs = sorted(set(
+            t.get("currency_pair", "") for t in filled_trades
+        ))
+
+        if open_pairs:
+            st.caption("Close by pair")
+            btn_cols = st.columns(len(open_pairs))
+            for i, pair_name in enumerate(open_pairs):
+                with btn_cols[i]:
+                    if st.button(f"Close {pair_name}", key=f"close_{pair_name}"):
+                        close_errors = []
+                        for t in filled_trades:
+                            if t.get("currency_pair") != pair_name:
+                                continue
+
+                            rid = t.get("request_id")
+                            direction = t.get("direction", "")
+                            units = float(t.get("position_size", t.get("units", 0)))
+
+                            if not rid or not broker:
+                                continue
+
+                            print(f"Closing position at broker: {rid} | {pair_name} {direction} {units}")
+                            result = broker.close_position(pair_name, units, direction)
+
+                            if result.get("status") == "SUCCESS":
+                                print(f"Broker close SUCCESS: {rid}")
+                                state_manager.close_trade(rid)
+                                print(f"State updated to CLOSED: {rid}")
+                            else:
+                                print(f"Broker close FAILED: {rid} — {result.get('reason')}")
+                                close_errors.append(f"{pair_name}: {result.get('reason')}")
+
+                        if close_errors:
+                            for err in close_errors:
+                                st.error(f"Close failed: {err}")
+                        else:
+                            st.rerun()
     else:
         st.info("No open positions.")
 
@@ -327,6 +395,7 @@ with alerts_col:
     else:
         st.caption("No active alerts")
 
-# --- Auto-refresh ---
+# --- Cleanup and auto-refresh ---
+state_manager.close()
 time.sleep(2)
 st.rerun()

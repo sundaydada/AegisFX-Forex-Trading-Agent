@@ -11,7 +11,6 @@ from market_data.alpha_vantage_price_feed import get_fx_price
 
 # --- Configuration ---
 TRADE_INTERVAL_SECONDS = 300  # 5 minutes between trades
-DURATION_MINUTES = 60         # Total run time: 1 hour
 DB_PATH = "dry_run_sustained.db"
 
 PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY"]
@@ -38,10 +37,10 @@ orchestrator = TradeOrchestrator(broker)
 
 # Startup
 print("=" * 60)
-print("AegisFX SUSTAINED DRY RUN")
-print(f"Duration: {DURATION_MINUTES} minutes")
+print("AegisFX CONTINUOUS TRADING SYSTEM")
 print(f"Trade interval: {TRADE_INTERVAL_SECONDS} seconds")
 print(f"Started: {datetime.now(timezone.utc).isoformat()}")
+print("Press Ctrl+C to stop")
 print("=" * 60)
 
 # Reconcile any pending trades from previous runs
@@ -51,19 +50,16 @@ orchestrator.reconcile_pending_trades(state_manager)
 print(f"\nAccount Balance: ${broker.get_account_balance():.2f}")
 
 start_time = time.time()
-end_time = start_time + (DURATION_MINUTES * 60)
 trade_counter = 0
 cycle = 0
 
 try:
-    while time.time() < end_time:
+    while True:
         cycle += 1
-        now = datetime.now(timezone.utc)
         elapsed_minutes = (time.time() - start_time) / 60
-        remaining_minutes = DURATION_MINUTES - elapsed_minutes
 
         print(f"\n{'=' * 60}")
-        print(f"CYCLE {cycle} | Elapsed: {elapsed_minutes:.1f}m | Remaining: {remaining_minutes:.1f}m")
+        print(f"CYCLE {cycle} | Elapsed: {elapsed_minutes:.1f}m | {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC")
         print(f"{'=' * 60}")
 
         # Fetch live prices
@@ -130,23 +126,22 @@ try:
         filled = sum(1 for t in all_trades if t.get("status") == "FILLED")
         failed = sum(1 for t in all_trades if t.get("status") == "FAILED")
         pending = sum(1 for t in all_trades if t.get("status") == "PENDING")
+        closed = sum(1 for t in all_trades if t.get("status") == "CLOSED")
         print(f"  Trade Ledger: {len(all_trades)} total | "
-              f"{filled} filled | {failed} failed | {pending} pending")
+              f"{filled} filled | {failed} failed | {pending} pending | {closed} closed")
 
         # Wait for next cycle
-        if time.time() < end_time:
-            wait = min(TRADE_INTERVAL_SECONDS, end_time - time.time())
-            print(f"\n  Next trade in {wait:.0f} seconds...")
-            time.sleep(wait)
+        print(f"\n  Next trade in {TRADE_INTERVAL_SECONDS} seconds...")
+        time.sleep(TRADE_INTERVAL_SECONDS)
 
 except KeyboardInterrupt:
-    print("\n\n--- Manual stop (Ctrl+C) ---")
+    print("\n\n--- System stopped by operator (Ctrl+C) ---")
 
 # Final report
 print(f"\n{'=' * 60}")
-print("SUSTAINED DRY RUN COMPLETE")
+print("AegisFX SHUTDOWN REPORT")
 print(f"{'=' * 60}")
-print(f"Duration: {(time.time() - start_time) / 60:.1f} minutes")
+print(f"Total runtime: {(time.time() - start_time) / 60:.1f} minutes")
 print(f"Trades attempted: {trade_counter}")
 display_metrics(orchestrator.get_metrics())
 
@@ -154,8 +149,9 @@ all_trades = state_manager.get_all_trades()
 filled = sum(1 for t in all_trades if t.get("status") == "FILLED")
 failed = sum(1 for t in all_trades if t.get("status") == "FAILED")
 pending = sum(1 for t in all_trades if t.get("status") == "PENDING")
+closed = sum(1 for t in all_trades if t.get("status") == "CLOSED")
 print(f"\nFinal Ledger: {len(all_trades)} total | "
-      f"{filled} filled | {failed} failed | {pending} pending")
+      f"{filled} filled | {failed} failed | {pending} pending | {closed} closed")
 
 try:
     print(f"Final Balance: ${broker.get_account_balance():.2f}")
@@ -169,3 +165,4 @@ else:
     print("INTEGRITY CHECK FAILED: Unresolved trades detected")
 
 state_manager.close()
+print("\nClean shutdown complete.")

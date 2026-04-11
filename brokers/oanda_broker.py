@@ -237,3 +237,63 @@ class OandaBroker(BrokerInterface):
                 "time": transaction.get("time", ""),
             },
         }
+
+    def close_position(self, currency_pair: str, units: float, direction: str) -> Dict:
+        """
+        Close a position by sending the opposite market order.
+        Long → send Short. Short → send Long.
+        """
+
+        instrument = currency_pair.replace("/", "_")
+
+        # Opposite direction to close
+        if direction == "Long":
+            close_units = -abs(units)
+        else:
+            close_units = abs(units)
+
+        payload = {
+            "order": {
+                "type": "MARKET",
+                "instrument": instrument,
+                "units": str(int(close_units)),
+                "timeInForce": "FOK",
+                "positionFill": "REDUCE_ONLY",
+            }
+        }
+
+        try:
+            data = self._make_request("/orders", method="POST", body=payload)
+        except RuntimeError as e:
+            return {
+                "status": "FAILED",
+                "reason": f"Broker API error: {str(e)}",
+            }
+
+        if "orderCancelTransaction" in data:
+            cancel = data["orderCancelTransaction"]
+            return {
+                "status": "FAILED",
+                "reason": cancel.get("reason", "Order cancelled by broker"),
+            }
+
+        if "orderRejectTransaction" in data:
+            reject = data["orderRejectTransaction"]
+            return {
+                "status": "FAILED",
+                "reason": reject.get("rejectReason", "Order rejected by broker"),
+            }
+
+        fill = data.get("orderFillTransaction")
+        if not fill:
+            return {
+                "status": "FAILED",
+                "reason": "Malformed response: missing orderFillTransaction",
+            }
+
+        return {
+            "status": "SUCCESS",
+            "close_price": float(fill.get("price", 0)),
+            "units_closed": abs(float(fill.get("units", 0))),
+            "timestamp": fill.get("time", ""),
+        }
