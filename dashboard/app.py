@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from execution.persistent_trade_state_manager import PersistentTradeStateManager
 from execution.risk_exposure import compute_risk_exposure
 from execution.trading_control import is_trading_enabled, set_trading_enabled
+from execution.performance_metrics import compute_performance_metrics
 from brokers.oanda_broker import OandaBroker
 
 MAX_ALLOWED_EXPOSURE = 10.0
@@ -110,6 +111,17 @@ print("DB PATH:", os.path.abspath(DB_PATH))
 state_manager = PersistentTradeStateManager(db_path=DB_PATH)
 all_trades = state_manager.get_all_trades()
 state_manager.close()
+
+# --- Performance KPIs ---
+perf = compute_performance_metrics(all_trades)
+
+kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+kpi_col1.metric("Closed Trades", perf["total_trades"] if perf["total_trades"] > 0 else "-")
+kpi_col2.metric("Win Rate", f"{perf['win_rate']:.1f}%" if perf["total_trades"] > 0 else "-")
+kpi_col3.metric("Total Profit", f"${perf['total_profit']:,.4f}" if perf["total_trades"] > 0 else "-")
+kpi_col4.metric("Total Pips", f"{perf['total_pips']:.1f}" if perf["total_trades"] > 0 else "-")
+
+st.divider()
 
 # --- Section B: Current Positions + Risk Exposure (side-by-side) ---
 filled_trades = [t for t in all_trades if t.get("status") == "FILLED"]
