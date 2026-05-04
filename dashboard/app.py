@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from execution.persistent_trade_state_manager import PersistentTradeStateManager
 from execution.risk_exposure import compute_risk_exposure
 from execution.trading_control import is_trading_enabled, set_trading_enabled
-from execution.performance_metrics import compute_performance_metrics
+from execution.performance_metrics import compute_performance_metrics, compute_daily_performance
 from brokers.oanda_broker import OandaBroker
 
 MAX_ALLOWED_EXPOSURE = 10.0
@@ -119,6 +119,27 @@ kpi_col1.metric("Closed Trades", perf["total_trades"] if perf["total_trades"] > 
 kpi_col2.metric("Win Rate", f"{perf['win_rate']:.1f}%" if perf["total_trades"] > 0 else "-")
 kpi_col3.metric("Total Profit", f"${perf['total_profit']:,.4f}" if perf["total_trades"] > 0 else "-")
 kpi_col4.metric("Total Pips", f"{perf['total_pips']:.1f}" if perf["total_trades"] > 0 else "-")
+
+st.divider()
+
+# --- Daily Performance ---
+st.subheader("Daily Performance (Consistency View)")
+
+daily_metrics = compute_daily_performance(all_trades)
+
+if daily_metrics:
+    daily_table = []
+    for day in daily_metrics:
+        daily_table.append({
+            "Date": day["date"],
+            "Trades": day["trades"],
+            "Win %": f"{day['win_rate']:.1f}%",
+            "Pips": f"{day['pips']:.4f}",
+            "Profit ($)": f"{day['profit']:.2f}",
+        })
+    st.dataframe(daily_table, use_container_width=True)
+else:
+    st.info("No closed trades available yet.")
 
 st.divider()
 
