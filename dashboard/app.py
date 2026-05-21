@@ -143,6 +143,43 @@ else:
 
 st.divider()
 
+# --- Equity Curve ---
+st.subheader("Equity Curve")
+
+equity_trades = [t for t in all_trades if t.get("status") == "CLOSED" and t.get("closed_at")]
+equity_trades.sort(key=lambda t: t.get("closed_at", ""))
+
+if equity_trades:
+    cumulative = 0.0
+    curve_data = []
+    for t in equity_trades:
+        entry_price = float(t.get("fill_price", 0.0))
+        close_price = float(t.get("close_price", 0.0))
+        direction = t.get("direction", "")
+        size = float(t.get("position_size", t.get("units", 0)))
+
+        if direction == "Long":
+            pip_diff = close_price - entry_price
+        elif direction == "Short":
+            pip_diff = entry_price - close_price
+        else:
+            pip_diff = 0.0
+
+        cumulative += pip_diff * size
+        curve_data.append({
+            "Time": t["closed_at"][:19],
+            "Cumulative Profit": round(cumulative, 4),
+        })
+
+    curve_df = pd.DataFrame(curve_data)
+    curve_df["Time"] = pd.to_datetime(curve_df["Time"])
+    curve_df = curve_df.set_index("Time")
+    st.line_chart(curve_df, use_container_width=True)
+else:
+    st.info("No equity curve data available yet.")
+
+st.divider()
+
 # --- Section B: Current Positions + Risk Exposure (side-by-side) ---
 filled_trades = [t for t in all_trades if t.get("status") == "FILLED"]
 
