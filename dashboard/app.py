@@ -18,6 +18,8 @@ from ai.strategy_recommendation_service import StrategyRecommendationService
 from ai.regime_transition_tracker import RegimeTransitionTracker
 from ai.trade_proposal_service import TradeProposalService
 from ai.proposal_approval_queue import ProposalApprovalQueue
+from ai.proposal_execution_bridge import ProposalExecutionBridge
+from execution.trade_orchestrator import TradeOrchestrator
 from market_data.alpha_vantage_price_feed import get_fx_price
 
 MAX_ALLOWED_EXPOSURE = 10.0
@@ -534,11 +536,13 @@ st.subheader("AI Approval Queue")
 try:
     approval_queue = ProposalApprovalQueue(db_path="proposal_approvals.db")
     pending_proposals = approval_queue.get_pending_proposals()
+    approved_proposals = approval_queue.get_approved_proposals()
     recent_decisions = approval_queue.get_recent_decisions(limit=10)
     approval_queue.close()
 except Exception as e:
     print(f"WARNING: Failed to load approval queue: {e}")
     pending_proposals = []
+    approved_proposals = []
     recent_decisions = []
 
 if pending_proposals:
@@ -575,12 +579,60 @@ if pending_proposals:
 else:
     st.info("No proposals pending approval.")
 
+# Approved proposals awaiting execution
+if approved_proposals:
+    st.caption(f"{len(approved_proposals)} approved proposal(s) — awaiting execution")
+
+    for p in approved_proposals:
+        with st.container():
+            cols = st.columns([3, 1])
+            with cols[0]:
+                st.markdown(
+                    f"**{p['pair']}** {p['direction']} | "
+                    f"size {p['suggested_size']} | "
+                    f"conf {p['confidence']}% | "
+                    f"{p['strategy']}"
+                )
+                st.caption(p["reason"])
+                st.markdown(
+                    "<span style='background-color:#00CC66; color:white; padding:2px 8px; "
+                    "border-radius:3px; font-size:11px;'>APPROVED</span>",
+                    unsafe_allow_html=True,
+                )
+            with cols[1]:
+                if st.button("Execute Trade", key=f"execute_{p['proposal_id']}"):
+                    if not broker:
+                        st.error("Broker not connected — cannot execute.")
+                    else:
+                        try:
+                            exec_orchestrator = TradeOrchestrator(broker)
+                            bridge_result = ProposalExecutionBridge.execute_approved_proposal(
+                                proposal=p,
+                                orchestrator=exec_orchestrator,
+                                state_manager=state_manager,
+                                max_currency_exposure=MAX_ALLOWED_EXPOSURE,
+                            )
+
+                            if bridge_result["success"]:
+                                aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
+                                aq.mark_executed(p["proposal_id"])
+                                aq.close()
+                                st.success(f"Executed: {bridge_result['message']}")
+                            else:
+                                st.error(f"Execution failed: {bridge_result['message']}")
+                        except Exception as e:
+                            st.error(f"Execution error: {str(e)}")
+
+                        st.rerun()
+
 if recent_decisions:
     st.caption("Recent Decisions")
     for d in recent_decisions:
         status = d["status"]
         if status == "APPROVED":
             color = "#00CC66"
+        elif status == "EXECUTED":
+            color = "#0066CC"
         elif status == "REJECTED":
             color = "#FF4444"
         else:

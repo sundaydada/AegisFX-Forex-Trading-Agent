@@ -108,6 +108,33 @@ class ProposalApprovalQueue:
         """Reject a PENDING proposal. Returns True if state changed."""
         return self._transition(proposal_id, "REJECTED")
 
+    def mark_executed(self, proposal_id: str) -> bool:
+        """Mark an APPROVED proposal as EXECUTED. Returns True if state changed."""
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = self._conn.execute(
+            """
+            UPDATE approval_queue
+            SET status = 'EXECUTED', reviewed_at = ?
+            WHERE proposal_id = ? AND status = 'APPROVED'
+            """,
+            (now, proposal_id),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def get_approved_proposals(self) -> List[Dict]:
+        """Return APPROVED proposals (awaiting execution)."""
+        cursor = self._conn.execute(
+            """
+            SELECT proposal_id, pair, direction, suggested_size, confidence,
+                   strategy, reason, status, created_at, reviewed_at
+            FROM approval_queue
+            WHERE status = 'APPROVED'
+            ORDER BY reviewed_at ASC
+            """
+        )
+        return [self._row_to_dict(row) for row in cursor]
+
     def _transition(self, proposal_id: str, new_status: str) -> bool:
         now = datetime.now(timezone.utc).isoformat()
         cursor = self._conn.execute(
