@@ -885,6 +885,120 @@ else:
 
 st.divider()
 
+# --- Investor PDF Report ---
+st.subheader("Investor PDF Report")
+
+if not has_report_data:
+    st.info("No investor report data available yet.")
+else:
+    from datetime import datetime as _dt, timezone as _tz
+
+    generated_at = _dt.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    # Summary KPIs from existing perf dict
+    summary_kpis = {
+        "Total Closed Trades": perf["total_trades"],
+        "Win Rate": f"{perf['win_rate']:.1f}%",
+        "Total Profit": f"${perf['total_profit']:,.4f}",
+        "Total Pips": f"{perf['total_pips']:.4f}",
+    }
+
+    # Build HTML report (browser-printable to PDF, self-contained)
+    html_parts = [
+        "<!DOCTYPE html>",
+        "<html><head><meta charset='utf-8'>",
+        "<title>AegisFX Investor Performance Report</title>",
+        "<style>",
+        "body { font-family: Arial, sans-serif; margin: 40px; color: #222; }",
+        "h1 { color: #0a3d62; border-bottom: 3px solid #0a3d62; padding-bottom: 8px; }",
+        "h2 { color: #0a3d62; margin-top: 30px; }",
+        ".meta { color: #666; font-size: 12px; margin-bottom: 24px; }",
+        "table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }",
+        "th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }",
+        "th { background: #f0f4f8; }",
+        ".kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }",
+        ".kpi-card { border: 1px solid #ccc; padding: 12px; text-align: center; }",
+        ".kpi-label { font-size: 12px; color: #666; }",
+        ".kpi-value { font-size: 22px; font-weight: bold; color: #0a3d62; margin-top: 4px; }",
+        "@media print { body { margin: 20px; } }",
+        "</style></head><body>",
+        "<h1>AegisFX Investor Performance Report</h1>",
+        f"<div class='meta'>Generated: {generated_at}</div>",
+    ]
+
+    # Summary KPIs
+    html_parts.append("<h2>Summary</h2><div class='kpi-grid'>")
+    for label, value in summary_kpis.items():
+        html_parts.append(
+            f"<div class='kpi-card'><div class='kpi-label'>{label}</div>"
+            f"<div class='kpi-value'>{value}</div></div>"
+        )
+    html_parts.append("</div>")
+
+    # Daily Performance
+    html_parts.append("<h2>Daily Performance</h2>")
+    if daily_metrics:
+        html_parts.append("<table><tr><th>Date</th><th>Trades</th><th>Win Rate</th><th>Pips</th><th>Profit ($)</th></tr>")
+        for day in daily_metrics:
+            html_parts.append(
+                f"<tr><td>{day['date']}</td><td>{day['trades']}</td>"
+                f"<td>{day['win_rate']:.1f}%</td><td>{day['pips']:.4f}</td>"
+                f"<td>{day['profit']:.2f}</td></tr>"
+            )
+        html_parts.append("</table>")
+    else:
+        html_parts.append("<p><em>No daily performance data.</em></p>")
+
+    # AI Proposal Analytics
+    html_parts.append("<h2>AI Proposal Analytics</h2>")
+    html_parts.append("<table><tr><th>Metric</th><th>Value</th></tr>")
+    for k, v in proposal_metrics.items():
+        html_parts.append(f"<tr><td>{k}</td><td>{v}</td></tr>")
+    html_parts.append("</table>")
+
+    # Strategy Attribution by Regime
+    html_parts.append("<h2>Strategy Attribution by Regime</h2>")
+    if attribution:
+        html_parts.append(
+            "<table><tr><th>Regime</th><th>Strategy</th><th>Trades</th>"
+            "<th>Win Rate</th><th>Avg Profit</th><th>Total Profit</th></tr>"
+        )
+        for regime in sorted(attribution.keys()):
+            for strategy in sorted(attribution[regime].keys()):
+                k = attribution[regime][strategy]
+                html_parts.append(
+                    f"<tr><td>{regime}</td><td>{strategy}</td>"
+                    f"<td>{k['trade_count']}</td><td>{k['win_rate']:.1f}%</td>"
+                    f"<td>{k['average_profit']:.4f}</td>"
+                    f"<td>{k['total_profit']:.4f}</td></tr>"
+                )
+        html_parts.append("</table>")
+    else:
+        html_parts.append("<p><em>No attribution data.</em></p>")
+
+    # AI Recommendation Accuracy
+    html_parts.append("<h2>AI Recommendation Accuracy</h2>")
+    html_parts.append("<table><tr><th>Metric</th><th>Value</th></tr>")
+    for k, v in accuracy_metrics.items():
+        html_parts.append(f"<tr><td>{k}</td><td>{v}</td></tr>")
+    html_parts.append("</table>")
+
+    html_parts.append("<p style='margin-top:30px; font-size:11px; color:#888;'>"
+                      "To convert to PDF: open this file in a browser and use Print → Save as PDF.</p>")
+    html_parts.append("</body></html>")
+
+    html_bytes = "\n".join(html_parts).encode("utf-8")
+
+    st.caption("PDF libraries not installed — generating HTML report (browser-printable to PDF).")
+    st.download_button(
+        label="Download Investor Report (HTML)",
+        data=html_bytes,
+        file_name="aegisfx_investor_report.html",
+        mime="text/html",
+    )
+
+st.divider()
+
 # --- AI Confidence Trend ---
 st.subheader("AI Confidence Trend")
 
