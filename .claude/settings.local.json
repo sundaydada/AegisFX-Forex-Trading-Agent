@@ -5,7 +5,8 @@
       "Bash(python -m tests.test_orchestrator_scenarios)",
       "Bash(pip show:*)",
       "Bash(pip install:*)",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(python -c ' *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Dell\\OneDrive",

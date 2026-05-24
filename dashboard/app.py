@@ -12,8 +12,30 @@ from execution.risk_exposure import compute_risk_exposure
 from execution.trading_control import is_trading_enabled, set_trading_enabled
 from execution.performance_metrics import compute_performance_metrics, compute_daily_performance
 from brokers.oanda_broker import OandaBroker
+from ai.market_analysis_service import MarketAnalysisService
+from ai.ai_analysis_history import AIAnalysisHistoryManager
+from market_data.alpha_vantage_price_feed import get_fx_price
 
 MAX_ALLOWED_EXPOSURE = 10.0
+
+
+@st.cache_data(ttl=30)
+def cached_ai_analysis(market_data_json: str) -> dict:
+    """Cache AI analysis for 30 seconds keyed by market data JSON."""
+    import json
+    service = MarketAnalysisService()
+    return service.analyze_market_context(json.loads(market_data_json))
+
+
+@st.cache_data(ttl=30)
+def cached_market_prices(pairs: tuple) -> dict:
+    """Cache live price fetches for 30 seconds."""
+    prices = {}
+    for pair in pairs:
+        price_data = get_fx_price(pair)
+        if "error" not in price_data:
+            prices[pair] = price_data.get("price", 0.0)
+    return prices
 
 # Load .env
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
@@ -339,26 +361,60 @@ with risk_col:
 
 st.divider()
 
-# --- Section C: AI Agreement + Alerts (side-by-side) ---
-ai_col, alerts_col = st.columns(2)
+# --- Section C: AI Agreement (full width) ---
 
-# --- Left: AI Agreement ---
+class _NullCtx:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+ai_col = _NullCtx()
+alerts_col = _NullCtx()
+
+# --- AI Agreement ---
 with ai_col:
     st.subheader("AI Agreement")
 
-    # Mock data — replace with get_ai_state() when agents are live
-    ai_state = {
-        "regime": "Trending",
-        "strategy": "Momentum_v1",
-        "confidence": 72,
-        "agents_agree": True,
-    }
+    # Build placeholder market context (trend/volatility heuristics for now)
+    import json as _json
+    pairs_to_analyze = ("EUR/USD", "GBP/USD", "USD/JPY")
+    live_prices = cached_market_prices(pairs_to_analyze)
 
-    # Action signal
-    if ai_state["agents_agree"] and ai_state["confidence"] > 70:
+    market_data = {}
+    for pair in pairs_to_analyze:
+        price = live_prices.get(pair, 0.0)
+        if price <= 0:
+            continue
+        # Placeholder heuristics — replace with real indicators later
+        market_data[pair] = {
+            "price": price,
+            "trend": "up",
+            "volatility": "medium",
+        }
+
+    if market_data:
+        ai_state = cached_ai_analysis(_json.dumps(market_data, sort_keys=True))
+    else:
+        ai_state = {"regime": "UNKNOWN", "summary": "No market data", "confidence": 0, "pair_analysis": {}}
+
+    # Record analysis history (observational only — never read by execution)
+    try:
+        history_mgr = AIAnalysisHistoryManager(db_path="ai_analysis_history.db")
+        history_mgr.record_analysis(ai_state)
+        history_mgr.close()
+    except Exception as e:
+        print(f"WARNING: Failed to record AI analysis history: {e}")
+
+    regime = ai_state.get("regime", "UNKNOWN")
+    summary = ai_state.get("summary", "")
+    confidence = int(ai_state.get("confidence", 0))
+    pair_analysis = ai_state.get("pair_analysis", {})
+
+    # Action signal — agents_agree is True if regime is known
+    agents_agree = regime != "UNKNOWN"
+    if agents_agree and confidence > 70:
         ai_signal = "STRONG"
         ai_color = "#00CC66"
-    elif ai_state["agents_agree"] and ai_state["confidence"] < 50:
+    elif agents_agree and confidence < 50:
         ai_signal = "WEAK"
         ai_color = "#FFAA00"
     else:
@@ -375,11 +431,59 @@ with ai_col:
         unsafe_allow_html=True,
     )
 
-    st.metric("Current Regime", ai_state["regime"])
-    st.metric("Active Strategy", ai_state["strategy"])
-    st.metric("Model Confidence", f"{ai_state['confidence']}%")
+    if regime == "UNKNOWN":
+        st.warning("AI analysis unavailable")
 
-# --- Right: Alerts / System Status ---
+    st.metric("Current Regime", regime)
+    st.metric("Model Confidence", f"{confidence}%")
+
+    if summary:
+        st.caption("Summary")
+        st.write(summary)
+
+    if pair_analysis:
+        st.caption("Per-Pair Analysis")
+        for pair, note in pair_analysis.items():
+            st.markdown(f"**{pair}** — {note}")
+
+st.divider()
+
+# --- AI Confidence Trend ---
+st.subheader("AI Confidence Trend")
+
+try:
+    history_mgr = AIAnalysisHistoryManager(db_path="ai_analysis_history.db")
+    confidence_trend = history_mgr.get_confidence_trend(limit=100)
+    recent_analyses = history_mgr.get_recent_analysis(limit=5)
+    history_mgr.close()
+except Exception as e:
+    print(f"WARNING: Failed to load AI analysis history: {e}")
+    confidence_trend = []
+    recent_analyses = []
+
+if confidence_trend:
+    trend_df = pd.DataFrame(confidence_trend)
+    trend_df["timestamp"] = pd.to_datetime(trend_df["timestamp"])
+    trend_df = trend_df.set_index("timestamp")
+    st.line_chart(trend_df, use_container_width=True)
+
+    if recent_analyses:
+        st.caption("Recent Regime Changes & Summaries")
+        recent_rows = []
+        for r in recent_analyses:
+            recent_rows.append({
+                "Time": r["timestamp"][:19],
+                "Regime": r["regime"],
+                "Confidence": f"{r['confidence']}%",
+                "Summary": r["summary"],
+            })
+        st.dataframe(recent_rows, use_container_width=True)
+else:
+    st.info("No AI analysis history available yet.")
+
+st.divider()
+
+# --- Alerts / System Status ---
 with alerts_col:
     st.subheader("Alerts / System Status")
 
