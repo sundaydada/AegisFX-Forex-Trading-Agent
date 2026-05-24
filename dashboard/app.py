@@ -20,6 +20,8 @@ from ai.trade_proposal_service import TradeProposalService
 from ai.proposal_approval_queue import ProposalApprovalQueue
 from ai.proposal_execution_bridge import ProposalExecutionBridge
 from ai.proposal_analytics import ProposalAnalytics
+from ai.strategy_attribution import StrategyAttributionAnalytics
+from ai.recommendation_accuracy import RecommendationAccuracyAnalytics
 from execution.trade_orchestrator import TradeOrchestrator
 from market_data.alpha_vantage_price_feed import get_fx_price
 
@@ -696,6 +698,110 @@ f_col3.metric(
     proposal_metrics["executed_proposals"],
     delta=f"{proposal_metrics['execution_rate']:.1f}% of approved",
 )
+
+st.divider()
+
+# --- Strategy Attribution by Regime ---
+st.subheader("Strategy Attribution by Regime")
+
+try:
+    attr_queue = ProposalApprovalQueue(db_path="proposal_approvals.db")
+    attr_history = AIAnalysisHistoryManager(db_path="ai_analysis_history.db")
+    attribution = StrategyAttributionAnalytics.compute_strategy_attribution(
+        proposal_queue=attr_queue,
+        trade_state_manager=state_manager,
+        ai_analysis_history=attr_history,
+    )
+    attr_queue.close()
+    attr_history.close()
+except Exception as e:
+    print(f"WARNING: Failed to compute strategy attribution: {e}")
+    attribution = {}
+
+if attribution:
+    for regime in sorted(attribution.keys()):
+        strategies = attribution[regime]
+        total_regime_trades = sum(s["trade_count"] for s in strategies.values())
+
+        with st.expander(f"{regime}  ({total_regime_trades} trade(s))", expanded=True):
+            for strategy_name in sorted(strategies.keys()):
+                kpis = strategies[strategy_name]
+                win_rate = kpis["win_rate"]
+
+                if win_rate > 60:
+                    wr_color = "#00CC66"
+                elif win_rate >= 40:
+                    wr_color = "#FFAA00"
+                else:
+                    wr_color = "#FF4444"
+
+                st.markdown(
+                    f"**{strategy_name}**  "
+                    f"<span style='background-color:{wr_color}; color:white; "
+                    f"padding:2px 8px; border-radius:3px; font-size:11px; "
+                    f"font-weight:bold;'>WIN {win_rate:.1f}%</span>",
+                    unsafe_allow_html=True,
+                )
+                sub_cols = st.columns(4)
+                sub_cols[0].metric("Trades", kpis["trade_count"])
+                sub_cols[1].metric("Win Rate", f"{kpis['win_rate']:.1f}%")
+                sub_cols[2].metric("Avg Profit", f"{kpis['average_profit']:.4f}")
+                sub_cols[3].metric("Total Profit", f"{kpis['total_profit']:.4f}")
+else:
+    st.info("No attribution data yet — needs executed AI trades that have closed.")
+
+st.divider()
+
+# --- AI Recommendation Accuracy ---
+st.subheader("AI Recommendation Accuracy")
+
+try:
+    acc_queue = ProposalApprovalQueue(db_path="proposal_approvals.db")
+    accuracy_metrics = RecommendationAccuracyAnalytics.compute_accuracy_metrics(
+        proposal_queue=acc_queue,
+        trade_state_manager=state_manager,
+    )
+    acc_queue.close()
+except Exception as e:
+    print(f"WARNING: Failed to compute accuracy metrics: {e}")
+    accuracy_metrics = {
+        "executed_recommendations": 0,
+        "profitable_recommendations": 0,
+        "accuracy_rate": 0.0,
+        "total_profit": 0.0,
+        "average_profit": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0,
+    }
+
+if accuracy_metrics["executed_recommendations"] > 0:
+    acc_rate = accuracy_metrics["accuracy_rate"]
+    if acc_rate > 60:
+        acc_color = "#00CC66"
+    elif acc_rate >= 40:
+        acc_color = "#FFAA00"
+    else:
+        acc_color = "#FF4444"
+
+    st.markdown(
+        f"<span style='background-color:{acc_color}; color:white; padding:4px 12px; "
+        f"border-radius:4px; font-size:14px; font-weight:bold;'>"
+        f"ACCURACY {acc_rate:.1f}%</span>",
+        unsafe_allow_html=True,
+    )
+
+    a_col1, a_col2, a_col3 = st.columns(3)
+    a_col1.metric("Executed Recommendations", accuracy_metrics["executed_recommendations"])
+    a_col2.metric("Profitable", accuracy_metrics["profitable_recommendations"])
+    a_col3.metric("Accuracy", f"{accuracy_metrics['accuracy_rate']:.1f}%")
+
+    b_col1, b_col2, b_col3, b_col4 = st.columns(4)
+    b_col1.metric("Total Profit", f"{accuracy_metrics['total_profit']:.4f}")
+    b_col2.metric("Avg Profit", f"{accuracy_metrics['average_profit']:.4f}")
+    b_col3.metric("Best Trade", f"{accuracy_metrics['best_trade']:.4f}")
+    b_col4.metric("Worst Trade", f"{accuracy_metrics['worst_trade']:.4f}")
+else:
+    st.info("No executed AI recommendations have closed yet.")
 
 st.divider()
 
