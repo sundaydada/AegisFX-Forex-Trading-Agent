@@ -15,6 +15,7 @@ from brokers.oanda_broker import OandaBroker
 from ai.market_analysis_service import MarketAnalysisService
 from ai.ai_analysis_history import AIAnalysisHistoryManager
 from ai.strategy_recommendation_service import StrategyRecommendationService
+from ai.regime_transition_tracker import RegimeTransitionTracker
 from market_data.alpha_vantage_price_feed import get_fx_price
 
 MAX_ALLOWED_EXPOSURE = 10.0
@@ -405,6 +406,16 @@ with ai_col:
     except Exception as e:
         print(f"WARNING: Failed to record AI analysis history: {e}")
 
+    # Track regime transitions (observational only)
+    try:
+        transition_tracker = RegimeTransitionTracker(db_path="regime_transitions.db")
+        _regime = ai_state.get("regime", "UNKNOWN")
+        _confidence = int(ai_state.get("confidence", 0))
+        transition_tracker.record_regime(_regime, _confidence)
+        transition_tracker.close()
+    except Exception as e:
+        print(f"WARNING: Failed to record regime transition: {e}")
+
     regime = ai_state.get("regime", "UNKNOWN")
     summary = ai_state.get("summary", "")
     confidence = int(ai_state.get("confidence", 0))
@@ -591,6 +602,31 @@ with alerts_col:
             st.warning(alert)
     else:
         st.caption("No active alerts")
+
+    # --- Recent Regime Changes ---
+    st.caption("Recent Regime Changes")
+    try:
+        transition_tracker = RegimeTransitionTracker(db_path="regime_transitions.db")
+        recent_transitions = transition_tracker.get_recent_transitions(limit=5)
+        transition_tracker.close()
+    except Exception as e:
+        print(f"WARNING: Failed to load regime transitions: {e}")
+        recent_transitions = []
+
+    if recent_transitions:
+        for t in recent_transitions:
+            arrow_text = f"{t['from_regime']} → {t['to_regime']}"
+            ts_short = t["timestamp"][:19]
+            to_regime = t["to_regime"]
+
+            if to_regime == "Risk-Off":
+                st.error(f"{arrow_text}  |  {ts_short}")
+            elif to_regime == "Volatile":
+                st.warning(f"{arrow_text}  |  {ts_short}")
+            else:
+                st.info(f"{arrow_text}  |  {ts_short}")
+    else:
+        st.write("_No regime changes recorded yet._")
 
 # --- Cleanup and auto-refresh ---
 state_manager.close()
