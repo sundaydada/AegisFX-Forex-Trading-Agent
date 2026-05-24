@@ -805,6 +805,86 @@ else:
 
 st.divider()
 
+# --- Investor Report Export ---
+st.subheader("Investor Report Export")
+
+import io as _io
+import csv as _csv
+
+# Determine if any report data exists
+has_report_data = (
+    bool(daily_metrics)
+    or proposal_metrics.get("total_proposals", 0) > 0
+    or bool(attribution)
+    or accuracy_metrics.get("executed_recommendations", 0) > 0
+)
+
+if not has_report_data:
+    st.info("No investor report data available yet.")
+else:
+    csv_buf = _io.StringIO()
+    writer = _csv.writer(csv_buf)
+
+    # Section 1: Daily Performance
+    writer.writerow(["=== Daily Performance ==="])
+    writer.writerow(["Date", "Trades", "Win Rate (%)", "Pips", "Profit ($)"])
+    if daily_metrics:
+        for day in daily_metrics:
+            writer.writerow([
+                day["date"],
+                day["trades"],
+                day["win_rate"],
+                day["pips"],
+                day["profit"],
+            ])
+    else:
+        writer.writerow(["(no data)"])
+    writer.writerow([])
+
+    # Section 2: AI Proposal Analytics
+    writer.writerow(["=== AI Proposal Analytics ==="])
+    writer.writerow(["Metric", "Value"])
+    for k, v in proposal_metrics.items():
+        writer.writerow([k, v])
+    writer.writerow([])
+
+    # Section 3: Strategy Attribution by Regime
+    writer.writerow(["=== Strategy Attribution by Regime ==="])
+    writer.writerow(["Regime", "Strategy", "Trades", "Win Rate (%)", "Avg Profit", "Total Profit"])
+    if attribution:
+        for regime in sorted(attribution.keys()):
+            for strategy in sorted(attribution[regime].keys()):
+                k = attribution[regime][strategy]
+                writer.writerow([
+                    regime,
+                    strategy,
+                    k["trade_count"],
+                    k["win_rate"],
+                    k["average_profit"],
+                    k["total_profit"],
+                ])
+    else:
+        writer.writerow(["(no data)"])
+    writer.writerow([])
+
+    # Section 4: AI Recommendation Accuracy
+    writer.writerow(["=== AI Recommendation Accuracy ==="])
+    writer.writerow(["Metric", "Value"])
+    for k, v in accuracy_metrics.items():
+        writer.writerow([k, v])
+
+    csv_bytes = csv_buf.getvalue().encode("utf-8")
+
+    st.caption("Export consolidated investor performance data as CSV.")
+    st.download_button(
+        label="Download Investor Report (CSV)",
+        data=csv_bytes,
+        file_name="aegisfx_investor_report.csv",
+        mime="text/csv",
+    )
+
+st.divider()
+
 # --- AI Confidence Trend ---
 st.subheader("AI Confidence Trend")
 
