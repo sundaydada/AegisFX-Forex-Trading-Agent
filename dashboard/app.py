@@ -14,6 +14,7 @@ from execution.performance_metrics import compute_performance_metrics, compute_d
 from brokers.oanda_broker import OandaBroker
 from ai.market_analysis_service import MarketAnalysisService
 from ai.ai_analysis_history import AIAnalysisHistoryManager
+from ai.strategy_recommendation_service import StrategyRecommendationService
 from market_data.alpha_vantage_price_feed import get_fx_price
 
 MAX_ALLOWED_EXPOSURE = 10.0
@@ -437,8 +438,42 @@ with ai_col:
     st.metric("Current Regime", regime)
     st.metric("Model Confidence", f"{confidence}%")
 
+    # Deterministic strategy recommendation
+    recommendation = StrategyRecommendationService.recommend_strategy(ai_state)
+
+    risk_mode = recommendation["risk_mode"]
+    if risk_mode == "NORMAL":
+        risk_mode_color = "#00CC66"
+    elif risk_mode == "REDUCED":
+        risk_mode_color = "#FFAA00"
+    else:
+        risk_mode_color = "#FF4444"
+
+    exec_color = "#00CC66" if recommendation["execution_allowed"] else "#FF4444"
+    exec_text = "ALLOWED" if recommendation["execution_allowed"] else "BLOCKED"
+
+    st.markdown(
+        f"""
+        <div style="margin-top:8px;">
+            <span style="background-color:{risk_mode_color}; color:white; padding:3px 10px;
+                         border-radius:4px; font-size:12px; font-weight:bold; margin-right:6px;">
+                RISK: {risk_mode}
+            </span>
+            <span style="background-color:{exec_color}; color:white; padding:3px 10px;
+                         border-radius:4px; font-size:12px; font-weight:bold;">
+                EXEC: {exec_text}
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.metric("Recommended Strategy", recommendation["recommended_strategy"])
+    st.metric("Trade Bias", recommendation["trade_bias"])
+    st.caption(f"Reason: {recommendation['reason']}")
+
     if summary:
-        st.caption("Summary")
+        st.caption("AI Summary")
         st.write(summary)
 
     if pair_analysis:
