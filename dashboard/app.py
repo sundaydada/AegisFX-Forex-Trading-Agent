@@ -23,7 +23,8 @@ from ai.proposal_analytics import ProposalAnalytics
 from ai.strategy_attribution import StrategyAttributionAnalytics
 from ai.recommendation_accuracy import RecommendationAccuracyAnalytics
 from execution.trade_orchestrator import TradeOrchestrator
-from market_data.alpha_vantage_price_feed import get_fx_price
+from market_data.alpha_vantage_price_feed import get_fx_price, get_fx_intraday
+from market_data.market_context import build_market_context
 
 MAX_ALLOWED_EXPOSURE = 10.0
 
@@ -45,6 +46,21 @@ def cached_market_prices(pairs: tuple) -> dict:
         if "error" not in price_data:
             prices[pair] = price_data.get("price", 0.0)
     return prices
+
+
+@st.cache_data(ttl=300)
+def cached_market_context(pairs: tuple) -> dict:
+    """
+    Cache intraday candles -> market context for 5 minutes.
+    Long TTL because Alpha Vantage free tier is rate-limited (5 req/min).
+    """
+    context = {}
+    for pair in pairs:
+        intraday = get_fx_intraday(pair, interval="5min", outputsize="compact")
+        candles = intraday.get("candles", [])
+        if candles:
+            context[pair] = build_market_context(pair, candles)
+    return context
 
 # Load .env
 env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
@@ -383,22 +399,10 @@ alerts_col = _NullCtx()
 with ai_col:
     st.subheader("AI Agreement")
 
-    # Build placeholder market context (trend/volatility heuristics for now)
+    # Build market context from real intraday candles (5-min interval, last ~100 candles)
     import json as _json
     pairs_to_analyze = ("EUR/USD", "GBP/USD", "USD/JPY")
-    live_prices = cached_market_prices(pairs_to_analyze)
-
-    market_data = {}
-    for pair in pairs_to_analyze:
-        price = live_prices.get(pair, 0.0)
-        if price <= 0:
-            continue
-        # Placeholder heuristics — replace with real indicators later
-        market_data[pair] = {
-            "price": price,
-            "trend": "up",
-            "volatility": "medium",
-        }
+    market_data = cached_market_context(pairs_to_analyze)
 
     if market_data:
         ai_state = cached_ai_analysis(_json.dumps(market_data, sort_keys=True))
