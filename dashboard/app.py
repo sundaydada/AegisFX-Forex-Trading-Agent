@@ -16,6 +16,7 @@ from ai.market_analysis_service import MarketAnalysisService
 from ai.ai_analysis_history import AIAnalysisHistoryManager
 from ai.strategy_recommendation_service import StrategyRecommendationService
 from ai.regime_transition_tracker import RegimeTransitionTracker
+from ai.trade_proposal_service import TradeProposalService
 from market_data.alpha_vantage_price_feed import get_fx_price
 
 MAX_ALLOWED_EXPOSURE = 10.0
@@ -491,6 +492,29 @@ with ai_col:
         st.caption("Per-Pair Analysis")
         for pair, note in pair_analysis.items():
             st.markdown(f"**{pair}** — {note}")
+
+st.divider()
+
+# --- AI Trade Proposals ---
+st.subheader("AI Trade Proposals")
+
+proposals = TradeProposalService.generate_trade_proposals(ai_state, recommendation)
+
+if proposals:
+    proposal_rows = []
+    for p in proposals:
+        proposal_rows.append({
+            "Pair": p["pair"],
+            "Direction": p["direction"],
+            "Size": p["suggested_size"],
+            "Confidence": f"{p['confidence']}%",
+            "Strategy": p["strategy"],
+            "Reason": p["reason"],
+        })
+    st.dataframe(proposal_rows, use_container_width=True)
+    st.caption("Proposals are advisory only — require operator approval before execution.")
+else:
+    st.info("No AI trade proposals available.")
 
 st.divider()
 
