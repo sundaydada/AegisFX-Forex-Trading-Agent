@@ -17,6 +17,7 @@ from ai.ai_analysis_history import AIAnalysisHistoryManager
 from ai.strategy_recommendation_service import StrategyRecommendationService
 from ai.regime_transition_tracker import RegimeTransitionTracker
 from ai.trade_proposal_service import TradeProposalService
+from ai.proposal_approval_queue import ProposalApprovalQueue
 from market_data.alpha_vantage_price_feed import get_fx_price
 
 MAX_ALLOWED_EXPOSURE = 10.0
@@ -500,6 +501,15 @@ st.subheader("AI Trade Proposals")
 
 proposals = TradeProposalService.generate_trade_proposals(ai_state, recommendation)
 
+# Enqueue proposals (duplicates auto-ignored by proposal_id hash)
+if proposals:
+    try:
+        approval_queue = ProposalApprovalQueue(db_path="proposal_approvals.db")
+        approval_queue.add_proposals(proposals)
+        approval_queue.close()
+    except Exception as e:
+        print(f"WARNING: Failed to enqueue proposals: {e}")
+
 if proposals:
     proposal_rows = []
     for p in proposals:
@@ -515,6 +525,74 @@ if proposals:
     st.caption("Proposals are advisory only — require operator approval before execution.")
 else:
     st.info("No AI trade proposals available.")
+
+st.divider()
+
+# --- AI Approval Queue ---
+st.subheader("AI Approval Queue")
+
+try:
+    approval_queue = ProposalApprovalQueue(db_path="proposal_approvals.db")
+    pending_proposals = approval_queue.get_pending_proposals()
+    recent_decisions = approval_queue.get_recent_decisions(limit=10)
+    approval_queue.close()
+except Exception as e:
+    print(f"WARNING: Failed to load approval queue: {e}")
+    pending_proposals = []
+    recent_decisions = []
+
+if pending_proposals:
+    st.caption(f"{len(pending_proposals)} pending proposal(s) — awaiting decision")
+
+    for p in pending_proposals:
+        with st.container():
+            cols = st.columns([3, 1, 1])
+            with cols[0]:
+                st.markdown(
+                    f"**{p['pair']}** {p['direction']} | "
+                    f"size {p['suggested_size']} | "
+                    f"conf {p['confidence']}% | "
+                    f"{p['strategy']}"
+                )
+                st.caption(p["reason"])
+                st.markdown(
+                    "<span style='background-color:#FFAA00; color:white; padding:2px 8px; "
+                    "border-radius:3px; font-size:11px;'>PENDING</span>",
+                    unsafe_allow_html=True,
+                )
+            with cols[1]:
+                if st.button("Approve", key=f"approve_{p['proposal_id']}"):
+                    aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
+                    aq.approve_proposal(p["proposal_id"])
+                    aq.close()
+                    st.rerun()
+            with cols[2]:
+                if st.button("Reject", key=f"reject_{p['proposal_id']}"):
+                    aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
+                    aq.reject_proposal(p["proposal_id"])
+                    aq.close()
+                    st.rerun()
+else:
+    st.info("No proposals pending approval.")
+
+if recent_decisions:
+    st.caption("Recent Decisions")
+    for d in recent_decisions:
+        status = d["status"]
+        if status == "APPROVED":
+            color = "#00CC66"
+        elif status == "REJECTED":
+            color = "#FF4444"
+        else:
+            color = "#888888"
+
+        st.markdown(
+            f"<span style='background-color:{color}; color:white; padding:2px 8px; "
+            f"border-radius:3px; font-size:11px; font-weight:bold;'>{status}</span> "
+            f"**{d['pair']}** {d['direction']} | size {d['suggested_size']} | "
+            f"conf {d['confidence']}% | reviewed: {d['reviewed_at'][:19] if d['reviewed_at'] else '-'}",
+            unsafe_allow_html=True,
+        )
 
 st.divider()
 
