@@ -19,6 +19,7 @@ from ai.regime_transition_tracker import RegimeTransitionTracker
 from ai.trade_proposal_service import TradeProposalService
 from ai.proposal_approval_queue import ProposalApprovalQueue
 from ai.proposal_execution_bridge import ProposalExecutionBridge
+from ai.proposal_analytics import ProposalAnalytics
 from execution.trade_orchestrator import TradeOrchestrator
 from market_data.alpha_vantage_price_feed import get_fx_price
 
@@ -645,6 +646,56 @@ if recent_decisions:
             f"conf {d['confidence']}% | reviewed: {d['reviewed_at'][:19] if d['reviewed_at'] else '-'}",
             unsafe_allow_html=True,
         )
+
+st.divider()
+
+# --- AI Proposal Analytics ---
+st.subheader("AI Proposal Analytics")
+
+try:
+    analytics_queue = ProposalApprovalQueue(db_path="proposal_approvals.db")
+    proposal_metrics = ProposalAnalytics.compute_proposal_metrics(
+        proposal_queue=analytics_queue,
+        trade_state_manager=state_manager,
+    )
+    analytics_queue.close()
+except Exception as e:
+    print(f"WARNING: Failed to compute proposal analytics: {e}")
+    proposal_metrics = {
+        "total_proposals": 0,
+        "approved_proposals": 0,
+        "rejected_proposals": 0,
+        "executed_proposals": 0,
+        "approval_rate": 0.0,
+        "execution_rate": 0.0,
+        "executed_win_rate": 0.0,
+        "average_profit": 0.0,
+        "total_realized_profit": 0.0,
+    }
+
+# Metric cards
+m_col1, m_col2, m_col3, m_col4, m_col5, m_col6 = st.columns(6)
+m_col1.metric("Total", proposal_metrics["total_proposals"])
+m_col2.metric("Approved", proposal_metrics["approved_proposals"])
+m_col3.metric("Executed", proposal_metrics["executed_proposals"])
+m_col4.metric("Win Rate", f"{proposal_metrics['executed_win_rate']:.1f}%")
+m_col5.metric("Avg Profit", f"${proposal_metrics['average_profit']:.4f}")
+m_col6.metric("Total Profit", f"${proposal_metrics['total_realized_profit']:.4f}")
+
+# Approval Funnel visualization
+st.caption("Approval Funnel")
+f_col1, f_col2, f_col3 = st.columns(3)
+f_col1.metric("Proposed", proposal_metrics["total_proposals"])
+f_col2.metric(
+    "Approved",
+    proposal_metrics["approved_proposals"] + proposal_metrics["executed_proposals"],
+    delta=f"{proposal_metrics['approval_rate']:.1f}% of decided",
+)
+f_col3.metric(
+    "Executed",
+    proposal_metrics["executed_proposals"],
+    delta=f"{proposal_metrics['execution_rate']:.1f}% of approved",
+)
 
 st.divider()
 
