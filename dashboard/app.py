@@ -184,7 +184,7 @@ if daily_metrics:
             "Pips": f"{day['pips']:.4f}",
             "Profit ($)": f"{day['profit']:.2f}",
         })
-    st.dataframe(daily_table, use_container_width=True)
+    st.dataframe(daily_table, width="stretch")
 else:
     st.info("No closed trades available yet.")
 
@@ -268,7 +268,7 @@ with pos_col:
                 "Unrealized P&L": unrealized_pl,
             })
 
-        st.dataframe(pos_data, use_container_width=True)
+        st.dataframe(pos_data, width="stretch")
 
         # Close All button
         if st.button("Close All Positions", type="primary"):
@@ -380,7 +380,7 @@ with risk_col:
     if net_exposure:
         st.caption("Net Exposure by Currency")
         exposure_data = [{"Currency": k, "Exposure": v} for k, v in net_exposure.items()]
-        st.dataframe(exposure_data, use_container_width=True)
+        st.dataframe(exposure_data, width="stretch")
     else:
         st.info("No exposure data.")
 
@@ -530,7 +530,7 @@ if proposals:
             "Strategy": p["strategy"],
             "Reason": p["reason"],
         })
-    st.dataframe(proposal_rows, use_container_width=True)
+    st.dataframe(proposal_rows, width="stretch")
     st.caption("Proposals are advisory only — require operator approval before execution.")
 else:
     st.info("No AI trade proposals available.")
@@ -1032,7 +1032,7 @@ if confidence_trend:
                 "Confidence": f"{r['confidence']}%",
                 "Summary": r["summary"],
             })
-        st.dataframe(recent_rows, use_container_width=True)
+        st.dataframe(recent_rows, width="stretch")
 else:
     st.info("No AI analysis history available yet.")
 
