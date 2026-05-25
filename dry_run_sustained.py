@@ -90,7 +90,7 @@ try:
             state_manager=state_manager,
             request_id=request_id,
             proposed_trade=proposed_trade,
-            max_currency_exposure=10.0,
+            max_currency_exposure=100.0,
         )
 
         exec_result = result.get("execution_result", {})

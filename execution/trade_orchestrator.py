@@ -21,7 +21,7 @@ class TradeOrchestrator:
     def __init__(self, broker: BrokerInterface):
         self._broker = broker
         self._trade_timestamps = []
-        self._max_trades_per_minute = 5
+        self._max_trades_per_minute = 100
         self._failure_threshold = 0.5
         self._min_trades_for_check = 3
         self._metrics = {

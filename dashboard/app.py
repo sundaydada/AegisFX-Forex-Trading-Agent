@@ -26,7 +26,7 @@ from execution.trade_orchestrator import TradeOrchestrator
 from market_data.alpha_vantage_price_feed import get_fx_price, get_fx_intraday
 from market_data.market_context import build_market_context
 
-MAX_ALLOWED_EXPOSURE = 10.0
+MAX_ALLOWED_EXPOSURE = 100.0
 
 
 @st.cache_data(ttl=30)

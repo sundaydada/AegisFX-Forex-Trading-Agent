@@ -13,7 +13,7 @@ class PortfolioRiskEvaluator:
         current_trades: List[Dict],
         proposed_trade: Dict,
         max_currency_exposure: float,
-        max_total_exposure: float = 10.0,
+        max_total_exposure: float = 100.0,
     ) -> Dict:
         """
         Returns:
