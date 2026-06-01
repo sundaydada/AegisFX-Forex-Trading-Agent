@@ -154,7 +154,10 @@ DB_PATH = os.path.join(
     "dry_run_sustained.db",
 )
 
-print("DB PATH:", os.path.abspath(DB_PATH))
+if "_db_path_logged" not in st.session_state:
+    print("DB PATH:", os.path.abspath(DB_PATH))
+    st.session_state["_db_path_logged"] = True
+
 state_manager = PersistentTradeStateManager(db_path=DB_PATH)
 all_trades = state_manager.get_all_trades()
 
