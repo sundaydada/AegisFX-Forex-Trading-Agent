@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from execution.persistent_trade_state_manager import PersistentTradeStateManager
 from execution.risk_exposure import compute_risk_exposure
 from execution.trading_control import is_trading_enabled, set_trading_enabled
+from execution.startup_logging import log_db_path_once
 from execution.performance_metrics import compute_performance_metrics, compute_daily_performance
 from brokers.oanda_broker import OandaBroker
 from ai.market_analysis_service import MarketAnalysisService
@@ -154,10 +155,7 @@ DB_PATH = os.path.join(
     "dry_run_sustained.db",
 )
 
-if "_db_path_logged" not in st.session_state:
-    print("DB PATH:", os.path.abspath(DB_PATH))
-    st.session_state["_db_path_logged"] = True
-
+log_db_path_once("dashboard", DB_PATH)
 state_manager = PersistentTradeStateManager(db_path=DB_PATH)
 all_trades = state_manager.get_all_trades()
 

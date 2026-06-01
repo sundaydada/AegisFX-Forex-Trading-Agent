@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from brokers.oanda_broker import OandaBroker
 from execution.persistent_trade_state_manager import PersistentTradeStateManager
+from execution.startup_logging import log_db_path_once
 from execution.trade_orchestrator import TradeOrchestrator
 from execution.monitor import display_metrics
 from market_data.alpha_vantage_price_feed import get_fx_price
@@ -31,7 +32,7 @@ broker = OandaBroker(
     base_url="https://api-fxpractice.oanda.com",
 )
 
-print("DB PATH:", os.path.abspath(DB_PATH))
+log_db_path_once("dry_run_sustained", DB_PATH)
 state_manager = PersistentTradeStateManager(db_path=DB_PATH)
 orchestrator = TradeOrchestrator(broker)
 
