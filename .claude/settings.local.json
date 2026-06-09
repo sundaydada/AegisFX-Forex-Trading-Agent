@@ -8,7 +8,8 @@
       "Bash(python -c ':*)",
       "Bash(python -c ' *)",
       "Bash(python -m pip install python-docx)",
-      "Bash(python docs/generate_report.py)"
+      "Bash(python docs/generate_report.py)",
+      "Bash(python docs/generate_architecture_diagram.py)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Dell\\OneDrive",

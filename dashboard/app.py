@@ -462,7 +462,7 @@ with ai_col:
     st.metric("Model Confidence", f"{confidence}%")
 
     # Deterministic strategy recommendation
-    recommendation = StrategyRecommendationService.recommend_strategy(ai_state)
+    recommendation = StrategyRecommendationService.recommend_strategy(ai_state, market_data)
 
     risk_mode = recommendation["risk_mode"]
     if risk_mode == "NORMAL":

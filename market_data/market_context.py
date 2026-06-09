@@ -66,6 +66,48 @@ def compute_volatility(candles: List[Dict]) -> str:
     return "low"
 
 
+def compute_range_percentile(candles: List[Dict], lookback: int = 20) -> float:
+    """
+    Compute current close as a percentile within the rolling N-period high/low range.
+
+    Returns: 0.0 to 100.0 (0 = at low, 100 = at high). Returns 50.0 if range is flat.
+    """
+    if len(candles) < lookback:
+        return 50.0
+
+    window = candles[-lookback:]
+    highs = [c.get("high", 0) for c in window if c.get("high", 0) > 0]
+    lows = [c.get("low", 0) for c in window if c.get("low", 0) > 0]
+
+    if not highs or not lows:
+        return 50.0
+
+    high_n = max(highs)
+    low_n = min(lows)
+    current = candles[-1].get("close", 0.0)
+
+    if high_n <= low_n:
+        return 50.0
+
+    pct = (current - low_n) / (high_n - low_n) * 100
+    return max(0.0, min(100.0, pct))
+
+
+def classify_position_in_range(range_percentile: float) -> str:
+    """
+    Bucket a range percentile into a discrete position label.
+
+    UPPER  : >= 80% (top of range — mean-reversion SHORT candidate)
+    LOWER  : <= 20% (bottom of range — mean-reversion LONG candidate)
+    MIDDLE : everything else
+    """
+    if range_percentile >= 80.0:
+        return "UPPER"
+    if range_percentile <= 20.0:
+        return "LOWER"
+    return "MIDDLE"
+
+
 def build_market_context(pair: str, candles: List[Dict]) -> Dict:
     """
     Build a market context dict for a pair using recent candles.
@@ -74,16 +116,27 @@ def build_market_context(pair: str, candles: List[Dict]) -> Dict:
         {
             "price": float (latest close),
             "trend": "up" | "down" | "flat",
-            "volatility": "low" | "medium" | "high"
+            "volatility": "low" | "medium" | "high",
+            "range_percentile": float (0-100),
+            "position_in_range": "UPPER" | "MIDDLE" | "LOWER"
         }
     """
     if not candles:
-        return {"price": 0.0, "trend": "flat", "volatility": "low"}
+        return {
+            "price": 0.0,
+            "trend": "flat",
+            "volatility": "low",
+            "range_percentile": 50.0,
+            "position_in_range": "MIDDLE",
+        }
 
     latest_close = candles[-1].get("close", 0.0)
+    range_pct = compute_range_percentile(candles)
 
     return {
         "price": latest_close,
         "trend": compute_trend(candles),
         "volatility": compute_volatility(candles),
+        "range_percentile": round(range_pct, 1),
+        "position_in_range": classify_position_in_range(range_pct),
     }

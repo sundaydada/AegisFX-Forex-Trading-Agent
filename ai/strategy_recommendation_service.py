@@ -9,12 +9,22 @@ class StrategyRecommendationService:
     """
 
     @staticmethod
-    def recommend_strategy(ai_analysis: Dict) -> Dict:
+    def recommend_strategy(ai_analysis: Dict, market_context: Dict = None) -> Dict:
         """
         Map AI analysis to a deterministic strategy recommendation.
 
         Args:
             ai_analysis: Dict with regime, confidence, summary, pair_analysis
+            market_context: Optional per-pair market context. When the AI returns
+                "Ranging", the strategy rule consults each pair's
+                position_in_range (UPPER/LOWER/MIDDLE) to decide directional bias.
+                Schema:
+                    {
+                        "EUR/USD": {"position_in_range": "UPPER", ...},
+                        "GBP/USD": {"position_in_range": "LOWER", ...},
+                        ...
+                    }
+                If omitted, Ranging falls back to NEUTRAL (legacy behavior).
 
         Returns:
             {
@@ -22,7 +32,8 @@ class StrategyRecommendationService:
                 "trade_bias": "LONG" | "SHORT" | "NEUTRAL",
                 "risk_mode": "NORMAL" | "REDUCED" | "AVOID",
                 "reason": str,
-                "execution_allowed": bool
+                "execution_allowed": bool,
+                "per_pair_bias": Dict[str, str]  # only present for Ranging w/ context
             }
         """
 
@@ -83,14 +94,47 @@ class StrategyRecommendationService:
                 })
             return recommendation
 
-        # Rule 4: Ranging regime — mean reversion
+        # Rule 4: Ranging regime — range-aware mean reversion
         if regime == "Ranging":
+            per_pair_bias = {}
+            upper_count = lower_count = middle_count = 0
+
+            if market_context:
+                for pair, ctx in market_context.items():
+                    pos = ctx.get("position_in_range", "MIDDLE")
+                    if pos == "UPPER":
+                        per_pair_bias[pair] = "SHORT"
+                        upper_count += 1
+                    elif pos == "LOWER":
+                        per_pair_bias[pair] = "LONG"
+                        lower_count += 1
+                    else:
+                        per_pair_bias[pair] = "NEUTRAL"
+                        middle_count += 1
+
+            # Top-level bias: pick dominant directional signal across pairs.
+            # When pairs disagree (some UPPER, some LOWER), top-level stays NEUTRAL
+            # but per_pair_bias still carries the actionable per-pair signals.
+            if upper_count > 0 and lower_count == 0:
+                top_bias = "SHORT"
+            elif lower_count > 0 and upper_count == 0:
+                top_bias = "LONG"
+            else:
+                top_bias = "NEUTRAL"
+
+            actionable = upper_count + lower_count
             recommendation.update({
                 "recommended_strategy": "MeanReversion_v1",
-                "trade_bias": "NEUTRAL",
-                "risk_mode": "NORMAL" if confidence >= 60 else "REDUCED",
-                "reason": f"Ranging market — mean reversion applicable ({confidence}%)",
+                "trade_bias": top_bias,
+                "risk_mode": "REDUCED",  # mean reversion always REDUCED — fading moves
+                "reason": (
+                    f"Ranging — {actionable} pair(s) at range extremes "
+                    f"(upper={upper_count}, lower={lower_count}, mid={middle_count})"
+                    if market_context else
+                    f"Ranging market — no per-pair range context available"
+                ),
                 "execution_allowed": True,
+                "per_pair_bias": per_pair_bias,
             })
             return recommendation
 
