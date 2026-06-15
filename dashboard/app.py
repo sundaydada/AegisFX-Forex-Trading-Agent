@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from execution.persistent_trade_state_manager import PersistentTradeStateManager
 from execution.risk_exposure import compute_risk_exposure
 from execution.trading_control import is_trading_enabled, set_trading_enabled
+from execution.autonomy_settings import AutonomySettingsManager
 from execution.startup_logging import log_db_path_once
 from execution.performance_metrics import compute_performance_metrics, compute_daily_performance
 from brokers.oanda_broker import OandaBroker
@@ -1137,6 +1138,111 @@ with alerts_col:
                 st.info(f"{arrow_text}  |  {ts_short}")
     else:
         st.write("_No regime changes recorded yet._")
+
+st.divider()
+
+# --- Autonomy Settings (Phase 1: UI-only configuration) ---
+st.subheader("Autonomy Settings")
+st.caption(
+    "Configure parameters for future autonomous execution. "
+    "These settings are stored but NOT yet wired to the orchestrator — "
+    "no trades will execute automatically regardless of this configuration."
+)
+
+try:
+    autonomy_mgr = AutonomySettingsManager(settings_path="autonomy_settings.json")
+    autonomy_current = autonomy_mgr.load_settings()
+except Exception as e:
+    st.error(f"Failed to load autonomy settings: {e}")
+    autonomy_current = {
+        "auto_trade_enabled": False,
+        "min_confidence": 85,
+        "max_trades_per_night": 10,
+        "max_position_size": 1.0,
+        "allowed_pairs": ["EUR/USD", "GBP/USD", "USD/JPY"],
+        "allowed_risk_modes": ["NORMAL", "REDUCED"],
+    }
+
+PAIR_OPTIONS = ["EUR/USD", "GBP/USD", "USD/JPY"]
+RISK_OPTIONS = ["NORMAL", "REDUCED"]
+
+with st.form("autonomy_settings_form"):
+    auto_col1, auto_col2 = st.columns(2)
+
+    with auto_col1:
+        new_auto_enabled = st.checkbox(
+            "Auto trade enabled",
+            value=bool(autonomy_current.get("auto_trade_enabled", False)),
+            help="When ON (in a future phase), the system will execute high-confidence proposals without manual approval.",
+        )
+
+        new_min_confidence = st.slider(
+            "Minimum confidence (%)",
+            min_value=0,
+            max_value=100,
+            value=int(autonomy_current.get("min_confidence", 85)),
+            step=1,
+        )
+
+        new_max_trades = st.number_input(
+            "Max trades per night",
+            min_value=0,
+            max_value=10000,
+            value=int(autonomy_current.get("max_trades_per_night", 10)),
+            step=1,
+        )
+
+    with auto_col2:
+        new_max_position = st.number_input(
+            "Max position size (units)",
+            min_value=0.0001,
+            value=float(autonomy_current.get("max_position_size", 1.0)),
+            step=0.1,
+            format="%.4f",
+        )
+
+        existing_pairs = [p for p in autonomy_current.get("allowed_pairs", []) if p in PAIR_OPTIONS]
+        new_allowed_pairs = st.multiselect(
+            "Allowed pairs",
+            options=PAIR_OPTIONS,
+            default=existing_pairs,
+        )
+
+        existing_risk = [r for r in autonomy_current.get("allowed_risk_modes", []) if r in RISK_OPTIONS]
+        new_allowed_risk = st.multiselect(
+            "Allowed risk modes",
+            options=RISK_OPTIONS,
+            default=existing_risk,
+        )
+
+    btn_col1, btn_col2, _ = st.columns([1, 1, 3])
+    save_clicked = btn_col1.form_submit_button("Save Settings", type="primary")
+    reset_clicked = btn_col2.form_submit_button("Reset Defaults")
+
+if save_clicked:
+    candidate = {
+        "auto_trade_enabled": bool(new_auto_enabled),
+        "min_confidence": int(new_min_confidence),
+        "max_trades_per_night": int(new_max_trades),
+        "max_position_size": float(new_max_position),
+        "allowed_pairs": list(new_allowed_pairs),
+        "allowed_risk_modes": list(new_allowed_risk),
+    }
+    try:
+        autonomy_mgr.save_settings(candidate)
+        st.success("Settings saved.")
+    except ValueError as e:
+        st.error(f"Validation failed: {e}")
+    except Exception as e:
+        st.error(f"Failed to save settings: {e}")
+
+if reset_clicked:
+    try:
+        autonomy_mgr.reset_defaults()
+        st.success("Settings reset to defaults.")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Failed to reset settings: {e}")
 
 # --- Cleanup and auto-refresh ---
 state_manager.close()

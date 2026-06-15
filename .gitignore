@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 tmp/
 trading_enabled.flag
+autonomy_settings.json
