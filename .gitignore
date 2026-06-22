@@ -6,3 +6,4 @@ __pycache__/
 tmp/
 trading_enabled.flag
 autonomy_settings.json
+logs/
