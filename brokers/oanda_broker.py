@@ -45,6 +45,64 @@ class OandaBroker(BrokerInterface):
                 f"OANDA connection error: {str(e.reason)}"
             )
 
+    @staticmethod
+    def _normalize_oanda_units(units) -> Dict:
+        """
+        Convert an upstream fractional/float position size into a
+        broker-valid OANDA integer unit count.
+
+        OANDA's v20 FX endpoint requires:
+            - units is an integer (sign-bearing string)
+            - units != 0 (zero rejects as UNITS_INVALID)
+
+        This helper:
+            - rounds to the nearest integer using round-half-away-from-zero
+              (so 0.5 -> 1 and -0.5 -> -1, matching trading-desk convention,
+              and avoiding Python's default round-half-to-even which would
+              turn 0.5 into 0 — re-introducing the original bug)
+            - preserves sign (positive = Long-side, negative = Short-side)
+            - rejects pre-flight when the rounded value is 0 — i.e. when
+              the requested size is too small to express as a tradeable
+              FX unit on OANDA
+
+        Returns:
+            {
+                "ok": True,
+                "value": int,            # broker-valid signed integer
+            }
+            or
+            {
+                "ok": False,
+                "reason": str,           # human-readable rejection message
+                "value": 0,
+            }
+        """
+        try:
+            numeric = float(units)
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "value": 0,
+                "reason": f"Order size {units!r} is not a number",
+            }
+
+        # Round half AWAY from zero (so 0.5 -> 1, -0.5 -> -1).
+        # math.floor(|x| + 0.5) gives ASTM-style commercial rounding;
+        # we re-apply the original sign afterward.
+        import math
+        sign = -1 if numeric < 0 else 1
+        rounded = sign * int(math.floor(abs(numeric) + 0.5))
+        if rounded == 0:
+            return {
+                "ok": False,
+                "value": 0,
+                "reason": (
+                    f"Order size {numeric} rounds to 0 units "
+                    f"(below OANDA minimum tradeable size of 1 unit)"
+                ),
+            }
+        return {"ok": True, "value": rounded}
+
     def place_order(self, order: Dict) -> Dict:
         required_fields = ["currency_pair", "direction", "position_size"]
         for field in required_fields:
@@ -59,11 +117,20 @@ class OandaBroker(BrokerInterface):
         if order["direction"] == "Short":
             units = -units
 
+        # Convert upstream float intent into OANDA-valid integer units.
+        # Reject pre-flight if the size is too small to send.
+        normalized = OandaBroker._normalize_oanda_units(units)
+        if not normalized["ok"]:
+            return {
+                "execution_status": "Rejected",
+                "reason": normalized["reason"],
+            }
+
         payload = {
             "order": {
                 "type": "MARKET",
                 "instrument": instrument,
-                "units": str(int(units)),
+                "units": str(normalized["value"]),
                 "timeInForce": "FOK",
                 "positionFill": "DEFAULT",
             }
@@ -252,11 +319,21 @@ class OandaBroker(BrokerInterface):
         else:
             close_units = abs(units)
 
+        # Convert into OANDA-valid integer units. Reject pre-flight if
+        # the rounded count is 0 (e.g. caller tried to close a position
+        # that was never broker-valid in the first place).
+        normalized = OandaBroker._normalize_oanda_units(close_units)
+        if not normalized["ok"]:
+            return {
+                "status": "FAILED",
+                "reason": normalized["reason"],
+            }
+
         payload = {
             "order": {
                 "type": "MARKET",
                 "instrument": instrument,
-                "units": str(int(close_units)),
+                "units": str(normalized["value"]),
                 "timeInForce": "FOK",
                 "positionFill": "REDUCE_ONLY",
             }

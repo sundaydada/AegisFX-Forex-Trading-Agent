@@ -18,17 +18,47 @@ Actual execution is the caller's responsibility (and is gated again
 by the orchestrator's deterministic safety stack).
 """
 
-from typing import Dict
+from datetime import datetime, timezone
+from typing import Dict, Optional
+
+DEFAULT_PROPOSAL_MAX_AGE_HOURS = 24
 
 
 class AutonomyGate:
     """
     Decides whether an AI proposal may be auto-executed.
 
-    All seven checks must pass for `allowed = True`. The returned dict
+    All eight checks must pass for `allowed = True`. The returned dict
     always contains every check key so the caller (and the dashboard)
     can show exactly which gate(s) blocked the proposal.
     """
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_created_at(value) -> Optional[datetime]:
+        """
+        Parse a stored ISO-8601 created_at into an aware UTC datetime.
+
+        Returns None for missing, non-string, or unparseable inputs.
+        Never raises — a freshness check on a malformed timestamp
+        must block the proposal, not crash the gate.
+        """
+        if not value or not isinstance(value, str):
+            return None
+        try:
+            # Accept "...Z" (UTC zulu) as well as "+00:00"
+            normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
+            dt = datetime.fromisoformat(normalized)
+        except (ValueError, TypeError):
+            return None
+        # If the parsed value is naive, assume it's UTC (matches the
+        # ProposalApprovalQueue persistence convention).
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
 
     @staticmethod
     def can_auto_execute(
@@ -55,6 +85,8 @@ class AutonomyGate:
             {
                 "allowed": bool,
                 "reason": str,
+                "proposal_age_hours": float | None,
+                "max_age_hours": float,
                 "checks": {
                     "auto_trade_enabled": bool,
                     "confidence": bool,
@@ -63,6 +95,7 @@ class AutonomyGate:
                     "size_allowed": bool,
                     "nightly_limit": bool,
                     "execution_allowed": bool,
+                    "freshness": bool,
                 }
             }
         """
@@ -131,6 +164,30 @@ class AutonomyGate:
         # 7. Proposal itself must permit execution
         execution_allowed_ok = bool(proposal.get("execution_allowed", False))
 
+        # 8. Freshness — proposal must not be older than max_age_hours
+        try:
+            max_age_hours = float(settings.get(
+                "proposal_max_age_hours", DEFAULT_PROPOSAL_MAX_AGE_HOURS
+            ))
+        except (ValueError, TypeError):
+            max_age_hours = float(DEFAULT_PROPOSAL_MAX_AGE_HOURS)
+        if max_age_hours < 0:
+            max_age_hours = float(DEFAULT_PROPOSAL_MAX_AGE_HOURS)
+
+        created_at_dt = AutonomyGate._parse_created_at(proposal.get("created_at"))
+        if created_at_dt is None:
+            # Missing or malformed timestamp -> cannot prove freshness -> block.
+            proposal_age_hours = None
+            freshness_ok = False
+        else:
+            now = datetime.now(timezone.utc)
+            delta_seconds = (now - created_at_dt).total_seconds()
+            # Negative ages (clock skew / future timestamp) are treated as 0
+            # so the proposal isn't blocked just because the server clock
+            # is slightly ahead. The other checks still apply.
+            proposal_age_hours = max(0.0, delta_seconds / 3600.0)
+            freshness_ok = proposal_age_hours <= max_age_hours
+
         # --- Aggregate ---
 
         checks = {
@@ -141,6 +198,7 @@ class AutonomyGate:
             "size_allowed": size_allowed,
             "nightly_limit": nightly_limit_ok,
             "execution_allowed": execution_allowed_ok,
+            "freshness": freshness_ok,
         }
 
         allowed = all(checks.values())
@@ -149,15 +207,31 @@ class AutonomyGate:
             reason = (
                 f"All autonomy checks passed (conf={proposal_confidence:.0f}>={min_confidence:.0f}, "
                 f"size={suggested_size}<={max_position_size}, "
-                f"nightly={count}/{nightly_max})"
+                f"nightly={count}/{nightly_max}, "
+                f"age={proposal_age_hours:.2f}h<={max_age_hours:.2f}h)"
             )
         else:
-            failed = [k for k, v in checks.items() if not v]
-            reason = "Blocked by: " + ", ".join(failed)
+            if not freshness_ok:
+                # Distinguish stale vs malformed-timestamp explicitly,
+                # while still flagging any other failures alongside.
+                failed = [k for k, v in checks.items() if not v and k != "freshness"]
+                if proposal_age_hours is None:
+                    primary = "proposal_expired (missing or malformed created_at)"
+                else:
+                    primary = (
+                        f"proposal_expired "
+                        f"(age={proposal_age_hours:.2f}h > max={max_age_hours:.2f}h)"
+                    )
+                reason = primary + ((" | Also blocked by: " + ", ".join(failed)) if failed else "")
+            else:
+                failed = [k for k, v in checks.items() if not v]
+                reason = "Blocked by: " + ", ".join(failed)
 
         return {
             "allowed": allowed,
             "reason": reason,
+            "proposal_age_hours": proposal_age_hours,
+            "max_age_hours": max_age_hours,
             "checks": checks,
         }
 
@@ -169,6 +243,10 @@ class AutonomyGate:
 
 def _run_self_tests() -> None:
     """Exercise every check path. Prints PASS/FAIL for each scenario."""
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    fresh_ts = now.isoformat()
 
     base_settings = {
         "auto_trade_enabled": True,
@@ -177,6 +255,7 @@ def _run_self_tests() -> None:
         "max_position_size": 1.0,
         "allowed_pairs": ["EUR/USD", "GBP/USD", "USD/JPY"],
         "allowed_risk_modes": ["NORMAL", "REDUCED"],
+        "proposal_max_age_hours": 24,
     }
 
     base_proposal = {
@@ -187,6 +266,7 @@ def _run_self_tests() -> None:
         "strategy": "Momentum_v1",
         "execution_allowed": True,
         "risk_mode": "NORMAL",
+        "created_at": fresh_ts,
     }
 
     def case(name, proposal, settings, count, expect_allowed, expect_blocker=None):
@@ -260,6 +340,80 @@ def _run_self_tests() -> None:
     result = AutonomyGate.can_auto_execute({}, {}, 0)
     safe_ok = result["allowed"] is False
     print(f"[{'PASS' if safe_ok else 'FAIL'}] Empty inputs fail safely (no crash)")
+
+    # ---- Freshness checks ----
+
+    # Fresh proposal (1 hour old) -> allowed
+    p = dict(base_proposal)
+    p["created_at"] = (now - timedelta(hours=1)).isoformat()
+    r = AutonomyGate.can_auto_execute(p, base_settings, 0)
+    fresh_ok = r["allowed"] and r["checks"]["freshness"] and r["proposal_age_hours"] < 2
+    print(f"[{'PASS' if fresh_ok else 'FAIL'}] Fresh proposal (1h) allowed")
+    if not fresh_ok:
+        print(f"       got: allowed={r['allowed']}, age={r.get('proposal_age_hours')}, "
+              f"freshness={r['checks'].get('freshness')}")
+
+    # Exactly at threshold (24h to the second) -> allowed (`<=`)
+    p = dict(base_proposal)
+    p["created_at"] = (now - timedelta(hours=24)).isoformat()
+    r = AutonomyGate.can_auto_execute(p, base_settings, 0)
+    threshold_ok = r["allowed"] and r["checks"]["freshness"]
+    print(f"[{'PASS' if threshold_ok else 'FAIL'}] At threshold (24h) allowed")
+    if not threshold_ok:
+        print(f"       got: allowed={r['allowed']}, age={r.get('proposal_age_hours')}, "
+              f"freshness={r['checks'].get('freshness')}")
+
+    # Past threshold (25h) -> blocked
+    p = dict(base_proposal)
+    p["created_at"] = (now - timedelta(hours=25)).isoformat()
+    r = AutonomyGate.can_auto_execute(p, base_settings, 0)
+    expired_ok = (not r["allowed"]
+                  and not r["checks"]["freshness"]
+                  and "proposal_expired" in r["reason"]
+                  and r["proposal_age_hours"] > 24)
+    print(f"[{'PASS' if expired_ok else 'FAIL'}] Past threshold (25h) blocked with proposal_expired reason")
+    if not expired_ok:
+        print(f"       got: allowed={r['allowed']}, reason={r['reason']}, "
+              f"age={r.get('proposal_age_hours')}")
+
+    # Malformed timestamp -> blocked safely (no crash, freshness=False)
+    p = dict(base_proposal)
+    p["created_at"] = "not-an-iso-8601-string"
+    r = AutonomyGate.can_auto_execute(p, base_settings, 0)
+    malformed_ok = (not r["allowed"]
+                    and not r["checks"]["freshness"]
+                    and r["proposal_age_hours"] is None
+                    and "proposal_expired" in r["reason"])
+    print(f"[{'PASS' if malformed_ok else 'FAIL'}] Malformed timestamp blocked safely")
+    if not malformed_ok:
+        print(f"       got: allowed={r['allowed']}, reason={r['reason']}, "
+              f"age={r.get('proposal_age_hours')}")
+
+    # Missing created_at -> blocked safely (same path as malformed)
+    p = dict(base_proposal); p.pop("created_at")
+    r = AutonomyGate.can_auto_execute(p, base_settings, 0)
+    missing_ok = (not r["allowed"]
+                  and not r["checks"]["freshness"]
+                  and r["proposal_age_hours"] is None)
+    print(f"[{'PASS' if missing_ok else 'FAIL'}] Missing created_at blocked safely")
+
+    # Setting override: max_age_hours = 1 -> a 2h proposal must block
+    p = dict(base_proposal)
+    p["created_at"] = (now - timedelta(hours=2)).isoformat()
+    s = dict(base_settings); s["proposal_max_age_hours"] = 1
+    r = AutonomyGate.can_auto_execute(p, s, 0)
+    override_ok = (not r["allowed"]
+                   and not r["checks"]["freshness"]
+                   and r["max_age_hours"] == 1.0)
+    print(f"[{'PASS' if override_ok else 'FAIL'}] Custom max_age_hours=1 blocks 2h-old proposal")
+
+    # Setting missing entirely -> default 24h is used
+    p = dict(base_proposal)
+    p["created_at"] = (now - timedelta(hours=23)).isoformat()
+    s = dict(base_settings); s.pop("proposal_max_age_hours")
+    r = AutonomyGate.can_auto_execute(p, s, 0)
+    default_ok = r["allowed"] and r["max_age_hours"] == float(DEFAULT_PROPOSAL_MAX_AGE_HOURS)
+    print(f"[{'PASS' if default_ok else 'FAIL'}] Missing setting uses default 24h")
 
     print("\nDone.")
 
