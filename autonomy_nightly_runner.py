@@ -57,15 +57,31 @@ def _today_utc_date() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _count_ai_trades_executed_tonight(state_manager) -> int:
-    """
-    Count AI-driven trades that hit the orchestrator since the start of
-    today UTC. We use the trade ledger as the source of truth — that's
-    where every orchestrator-routed trade gets recorded.
+# Trade statuses that represent a real position-opening event.
+# FILLED  = trade is currently open at the broker.
+# CLOSED  = trade opened and was subsequently closed — it still
+#           consumed a nightly slot when it opened.
+#
+# Excluded by design:
+#   FAILED    -> broker rejected or errored, no position was ever opened
+#   PENDING   -> in-flight, broker has not confirmed; if it lingers,
+#                crash recovery / freshness handle it
+#   (any other transient/error state)
+_NIGHTLY_QUOTA_STATUSES = ("FILLED", "CLOSED")
 
-    A trade qualifies if:
+
+def _count_ai_trades_filled_tonight(state_manager) -> int:
+    """
+    Count AI-driven trades that actually OPENED A POSITION today (UTC).
+
+    The nightly cap is a position-opening budget, not a broker-attempt
+    budget. A trade qualifies only if all three are true:
         - request_id starts with "AI-PROPOSAL-"
         - created_at is today (UTC)
+        - status is FILLED or CLOSED
+
+    FAILED, PENDING, and other transient states are not counted —
+    they did not consume the operator's risk budget.
     """
     today = _today_utc_date()
     all_trades = state_manager.get_all_trades()
@@ -73,8 +89,14 @@ def _count_ai_trades_executed_tonight(state_manager) -> int:
     for t in all_trades:
         rid = str(t.get("request_id", ""))
         created = str(t.get("created_at", ""))
-        if rid.startswith("AI-PROPOSAL-") and created.startswith(today):
-            count += 1
+        status = t.get("status", "")
+        if not rid.startswith("AI-PROPOSAL-"):
+            continue
+        if not created.startswith(today):
+            continue
+        if status not in _NIGHTLY_QUOTA_STATUSES:
+            continue
+        count += 1
     return count
 
 
@@ -130,9 +152,9 @@ def main():
                 print(f"  ERROR loading approval queue: {e}")
                 approved_proposals = []
 
-            # --- Count AI trades already executed today ---
+            # --- Count AI trades that actually opened a position today ---
             try:
-                nightly_count = _count_ai_trades_executed_tonight(state_manager)
+                nightly_count = _count_ai_trades_filled_tonight(state_manager)
             except Exception as e:
                 print(f"  ERROR counting nightly trades: {e}")
                 nightly_count = 0
