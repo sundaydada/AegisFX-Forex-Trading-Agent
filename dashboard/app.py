@@ -25,8 +25,10 @@ from ai.proposal_analytics import ProposalAnalytics
 from ai.strategy_attribution import StrategyAttributionAnalytics
 from ai.recommendation_accuracy import RecommendationAccuracyAnalytics
 from execution.trade_orchestrator import TradeOrchestrator
+from execution.autonomy_gate import DEFAULT_PROPOSAL_MAX_AGE_HOURS
 from market_data.alpha_vantage_price_feed import get_fx_price, get_fx_intraday
 from market_data.market_context import build_market_context
+from dashboard.approval_snapshot import load_approval_queue_snapshot
 
 MAX_ALLOWED_EXPOSURE = 100.0
 
@@ -543,11 +545,13 @@ st.divider()
 st.subheader("AI Approval Queue")
 
 try:
-    approval_queue = ProposalApprovalQueue(db_path="proposal_approvals.db")
-    pending_proposals = approval_queue.get_pending_proposals()
-    approved_proposals = approval_queue.get_approved_proposals()
-    recent_decisions = approval_queue.get_recent_decisions(limit=10)
-    approval_queue.close()
+    snapshot = load_approval_queue_snapshot(
+        db_path="proposal_approvals.db",
+        max_age_hours=DEFAULT_PROPOSAL_MAX_AGE_HOURS,
+    )
+    pending_proposals = snapshot["pending"]
+    approved_proposals = snapshot["approved"]
+    recent_decisions = snapshot["recent"]
 except Exception as e:
     print(f"WARNING: Failed to load approval queue: {e}")
     pending_proposals = []

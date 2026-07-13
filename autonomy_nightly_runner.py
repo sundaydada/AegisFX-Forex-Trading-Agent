@@ -42,6 +42,7 @@ from execution.persistent_trade_state_manager import PersistentTradeStateManager
 from execution.startup_logging import log_db_path_once
 from execution.trade_orchestrator import TradeOrchestrator
 from execution.autonomy_execution_bridge import AutonomyExecutionBridge
+from execution.autonomy_gate import DEFAULT_PROPOSAL_MAX_AGE_HOURS
 from ai.proposal_approval_queue import ProposalApprovalQueue
 
 
@@ -146,6 +147,9 @@ def main():
             # --- Pull current APPROVED proposals ---
             try:
                 queue = ProposalApprovalQueue(db_path=APPROVAL_DB_PATH)
+                queue.expire_stale_approved_proposals(
+                    max_age_hours=DEFAULT_PROPOSAL_MAX_AGE_HOURS
+                )
                 approved_proposals = queue.get_approved_proposals()
                 queue.close()
             except Exception as e:
