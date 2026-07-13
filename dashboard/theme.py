@@ -171,9 +171,9 @@ def build_global_css() -> str:
     flex-direction: column;
     align-items: flex-start;
     justify-content: center;
-    gap: 0.75rem;
+    gap: 0.65rem;
     width: 100%;
-    min-height: 7rem;
+    min-height: 6.5rem;
     padding: 1rem;
     background: {palette["card_background"]};
     border: 1px solid {palette["card_border"]};
@@ -187,6 +187,22 @@ def build_global_css() -> str:
     font-weight: 800;
     letter-spacing: 0.1em;
     text-transform: uppercase;
+}}
+
+.aegis-status-tile__value {{
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    min-width: 0;
+    line-height: 1.3;
+}}
+
+.aegis-status-tile__value .aegis-status-pill {{
+    max-width: 100%;
+    font-size: 0.8rem !important;
+    font-weight: 800 !important;
+    white-space: normal !important;
 }}
 
 /* Streamlit metric cards and values. */
@@ -284,6 +300,11 @@ hr {{
         width: 100%;
         min-height: auto;
         padding: 0.9rem;
+    }}
+
+    .aegis-status-tile__value,
+    .aegis-status-tile__value .aegis-status-pill {{
+        max-width: 100%;
     }}
 
     .aegis-proposal-card__top {{

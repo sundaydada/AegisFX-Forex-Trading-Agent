@@ -36,7 +36,8 @@ def build_preview_model() -> dict[str, object]:
             {
                 "label": "Risk Utilization",
                 "value": "37%",
-                "delta": "Within limits",
+                "delta": None,
+                "supporting_text": "Within limits",
                 "delta_color": "off",
             },
         ],
@@ -151,6 +152,8 @@ def render_preview_dashboard(
             delta=metric["delta"],
             delta_color=metric["delta_color"],
         )
+        if metric.get("supporting_text"):
+            column.caption(metric["supporting_text"])
 
     st_module.divider()
     st_module.subheader("Current Positions")
@@ -203,7 +206,9 @@ def render_preview_dashboard(
             f"""
             <div class="aegis-status-tile">
                 <span class="aegis-status-tile__label">{status["label"]}</span>
-                {pill}
+                <div class="aegis-status-tile__value">
+                    {pill}
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
