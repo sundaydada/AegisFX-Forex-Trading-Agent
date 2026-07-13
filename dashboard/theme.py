@@ -346,6 +346,73 @@ def build_pill_html(label: str, tone: str) -> str:
     )
 
 
+def build_hero_html(
+    eyebrow: str,
+    subtitle: str,
+    status_label: str,
+    status_tone: str,
+) -> str:
+    """Return an escaped hero fragment with a semantic status pill."""
+    status_pill = build_pill_html(status_label, status_tone)
+    safe_eyebrow = escape(eyebrow)
+    safe_subtitle = escape(subtitle)
+    return (
+        '<div class="aegis-card aegis-hero">'
+        f'<span class="aegis-hero__eyebrow">{safe_eyebrow}</span>'
+        f'<p class="aegis-hero__subtitle">{safe_subtitle}</p>'
+        f"{status_pill}</div>"
+    )
+
+
+def build_proposal_card_html(
+    pair: str,
+    status: str,
+    tone: str,
+    direction: str | None = None,
+    confidence: str | None = None,
+) -> str:
+    """Return an escaped proposal card with optional visible metadata."""
+    status_pill = build_pill_html(status, tone)
+    tone_key = tone.strip().lower()
+    safe_pair = escape(pair)
+
+    metadata = []
+    if direction is not None:
+        metadata.append(f"<span>{escape(direction)}</span>")
+    if confidence is not None:
+        metadata.append(f"<span>Confidence {escape(confidence)}</span>")
+
+    metadata_html = ""
+    if metadata:
+        metadata_html = (
+            '<div class="aegis-proposal-card__meta">'
+            f'{" &middot; ".join(metadata)}</div>'
+        )
+
+    return (
+        f'<div class="aegis-proposal-card aegis-proposal-card--{tone_key}">'
+        '<div class="aegis-proposal-card__top">'
+        f'<span class="aegis-proposal-card__pair">{safe_pair}</span>'
+        f"{status_pill}</div>{metadata_html}</div>"
+    )
+
+
+def build_status_tile_html(
+    label: str,
+    value: str,
+    tone: str,
+) -> str:
+    """Return an escaped status tile with a semantic value pill."""
+    value_pill = build_pill_html(value, tone)
+    safe_label = escape(label)
+    return (
+        '<div class="aegis-status-tile">'
+        f'<span class="aegis-status-tile__label">{safe_label}</span>'
+        '<div class="aegis-status-tile__value">'
+        f"{value_pill}</div></div>"
+    )
+
+
 def apply_dashboard_theme(st_module) -> None:
     """Apply the stylesheet through a supplied Streamlit-compatible object."""
     st_module.markdown(

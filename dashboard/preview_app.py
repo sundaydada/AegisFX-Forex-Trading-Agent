@@ -2,7 +2,12 @@
 
 from collections.abc import Mapping
 
-from dashboard.theme import apply_dashboard_theme, build_pill_html
+from dashboard.theme import (
+    apply_dashboard_theme,
+    build_hero_html,
+    build_proposal_card_html,
+    build_status_tile_html,
+)
 
 
 def build_preview_model() -> dict[str, object]:
@@ -94,29 +99,6 @@ def build_preview_model() -> dict[str, object]:
     }
 
 
-def _build_proposal_card_html(
-    proposal: Mapping[str, str],
-    tone: str,
-) -> str:
-    pill = build_pill_html(proposal["status"], tone)
-    metadata = []
-    if proposal.get("direction"):
-        metadata.append(f'<span>{proposal["direction"]}</span>')
-    if proposal.get("confidence"):
-        metadata.append(f'<span>Confidence {proposal["confidence"]}</span>')
-    meta_html = (
-        f'<div class="aegis-proposal-card__meta">{" · ".join(metadata)}</div>'
-        if metadata
-        else ""
-    )
-    return (
-        f'<div class="aegis-proposal-card aegis-proposal-card--{tone}">'
-        '<div class="aegis-proposal-card__top">'
-        f'<span class="aegis-proposal-card__pair">{proposal["pair"]}</span>'
-        f"{pill}</div>{meta_html}</div>"
-    )
-
-
 def render_preview_dashboard(
     st_module,
     model: Mapping[str, object],
@@ -129,15 +111,13 @@ def render_preview_dashboard(
     system_status = model["system_status"]
 
     st_module.title(headline["title"])
-    hero_status = build_pill_html(headline["status"], "success")
     st_module.markdown(
-        f"""
-        <div class="aegis-card aegis-hero">
-            <span class="aegis-hero__eyebrow">{headline["eyebrow"]}</span>
-            <p class="aegis-hero__subtitle">{headline["subtitle"]}</p>
-            {hero_status}
-        </div>
-        """,
+        build_hero_html(
+            eyebrow=headline["eyebrow"],
+            subtitle=headline["subtitle"],
+            status_label=headline["status"],
+            status_tone="success",
+        ),
         unsafe_allow_html=True,
     )
     st_module.caption(
@@ -171,7 +151,13 @@ def render_preview_dashboard(
     )
     for proposal in approval_queue["pending"]:
         pending_column.markdown(
-            _build_proposal_card_html(proposal, "warning"),
+            build_proposal_card_html(
+                pair=proposal["pair"],
+                status=proposal["status"],
+                tone="warning",
+                direction=proposal.get("direction"),
+                confidence=proposal.get("confidence"),
+            ),
             unsafe_allow_html=True,
         )
 
@@ -181,7 +167,13 @@ def render_preview_dashboard(
     )
     for proposal in approval_queue["approved"]:
         approved_column.markdown(
-            _build_proposal_card_html(proposal, "success"),
+            build_proposal_card_html(
+                pair=proposal["pair"],
+                status=proposal["status"],
+                tone="success",
+                direction=proposal.get("direction"),
+                confidence=proposal.get("confidence"),
+            ),
             unsafe_allow_html=True,
         )
 
@@ -193,7 +185,13 @@ def render_preview_dashboard(
     for proposal in approval_queue["recent"]:
         tone = recent_tones[proposal["status"]]
         recent_column.markdown(
-            _build_proposal_card_html(proposal, tone),
+            build_proposal_card_html(
+                pair=proposal["pair"],
+                status=proposal["status"],
+                tone=tone,
+                direction=proposal.get("direction"),
+                confidence=proposal.get("confidence"),
+            ),
             unsafe_allow_html=True,
         )
 
@@ -201,16 +199,12 @@ def render_preview_dashboard(
     st_module.subheader("System Status")
     status_columns = st_module.columns(4)
     for column, status in zip(status_columns, system_status):
-        pill = build_pill_html(status["value"], status["tone"])
         column.markdown(
-            f"""
-            <div class="aegis-status-tile">
-                <span class="aegis-status-tile__label">{status["label"]}</span>
-                <div class="aegis-status-tile__value">
-                    {pill}
-                </div>
-            </div>
-            """,
+            build_status_tile_html(
+                label=status["label"],
+                value=status["value"],
+                tone=status["tone"],
+            ),
             unsafe_allow_html=True,
         )
 

@@ -90,3 +90,76 @@ def test_apply_dashboard_theme_makes_one_unsafe_markdown_call():
     apply_dashboard_theme(spy)
 
     assert spy.calls == [(build_global_css(), {"unsafe_allow_html": True})]
+
+
+def test_hero_builder_returns_complete_escaped_theme_markup():
+    from dashboard.theme import build_hero_html
+
+    html = build_hero_html(
+        "Preview <Desk>",
+        "Broker & database free",
+        "HEALTHY > IDLE",
+        "success",
+    )
+
+    assert isinstance(html, str)
+    assert "aegis-card aegis-hero" in html
+    assert "aegis-hero__eyebrow" in html
+    assert "aegis-hero__subtitle" in html
+    assert "aegis-status-pill" in html
+    assert "Preview" in html and "Broker" in html and "HEALTHY" in html
+    assert "&lt;Desk&gt;" in html
+    assert "Broker &amp; database free" in html
+    assert "HEALTHY &gt; IDLE" in html
+
+    with pytest.raises(ValueError):
+        build_hero_html("Preview", "Offline", "UNKNOWN", "unsupported")
+
+
+def test_proposal_card_builder_returns_escaped_optional_markup():
+    from dashboard.theme import build_proposal_card_html
+
+    html = build_proposal_card_html(
+        "EUR/USD <demo>",
+        "PENDING & REVIEW",
+        "warning",
+        direction="LONG > FLAT",
+        confidence="82% & steady",
+    )
+
+    assert "aegis-proposal-card" in html
+    assert "aegis-proposal-card--warning" in html
+    assert "aegis-proposal-card__top" in html
+    assert "aegis-proposal-card__pair" in html
+    assert "aegis-proposal-card__meta" in html
+    assert "aegis-status-pill" in html
+    assert all(text in html for text in ("EUR/USD", "LONG", "82%", "PENDING"))
+    assert "&lt;demo&gt;" in html
+    assert "PENDING &amp; REVIEW" in html
+    assert "LONG &gt; FLAT" in html
+    assert "82% &amp; steady" in html
+    assert "None" not in build_proposal_card_html("USD/JPY", "EXPIRED", "expired")
+
+    with pytest.raises(ValueError):
+        build_proposal_card_html("USD/JPY", "UNKNOWN", "unsupported")
+
+
+def test_status_tile_builder_returns_escaped_value_hierarchy():
+    from dashboard.theme import build_status_tile_html
+
+    html = build_status_tile_html(
+        "Broker <Primary>",
+        "Connected & ready > idle",
+        "success",
+    )
+
+    assert "aegis-status-tile" in html
+    assert "aegis-status-tile__label" in html
+    assert "aegis-status-tile__value" in html
+    assert "aegis-status-pill" in html
+    assert "Broker" in html and "Connected" in html
+    assert "Broker &lt;Primary&gt;" in html
+    assert "Connected &amp; ready &gt; idle" in html
+
+    with pytest.raises(ValueError):
+        build_status_tile_html("Broker", "Unknown", "unsupported")
