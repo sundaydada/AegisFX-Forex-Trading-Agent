@@ -1,6 +1,6 @@
 import sqlite3
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 
@@ -167,6 +167,70 @@ class ProposalApprovalQueue:
         )
         self._conn.commit()
         return cursor.rowcount > 0
+
+    def expire_stale_approved_proposals(self, max_age_hours, now=None) -> int:
+        """
+        Transition APPROVED rows older than `max_age_hours` to status 'EXPIRED'.
+
+        Only rows where status = 'APPROVED' AND created_at is non-NULL AND
+        the age (now - created_at) is strictly greater than max_age_hours
+        are affected. Rows exactly at the threshold remain APPROVED, so
+        this method's inclusion rule stays consistent with the runtime
+        gate's `age <= max_age_hours` freshness check in autonomy_gate.py.
+
+        `reviewed_at` is NOT overwritten — the historical record of WHEN
+        the operator approved the proposal is preserved as audit evidence.
+
+        Args:
+            max_age_hours: Numeric hours; ValueError if negative.
+            now: Optional datetime. If None, timezone-aware UTC "now" is
+                used. Aware datetimes are normalized to UTC. Naive
+                datetimes are treated as UTC (matches the convention used
+                elsewhere in this queue's persistence layer).
+
+        Returns:
+            Integer count of rows transitioned by THIS call. Subsequent
+            calls with the same inputs return 0 (idempotent).
+        """
+        # Reject negative thresholds up front. float() coerces ints,
+        # floats, and numeric strings; anything else raises TypeError
+        # or ValueError, both of which are appropriate errors here.
+        max_age_hours = float(max_age_hours)
+        if max_age_hours < 0:
+            raise ValueError(
+                f"max_age_hours must be non-negative, got {max_age_hours!r}"
+            )
+
+        # Resolve "now": use caller-supplied when provided, otherwise
+        # timezone-aware UTC. Normalize aware datetimes to UTC; treat
+        # naive datetimes as UTC (matches how created_at is written).
+        if now is None:
+            now = datetime.now(timezone.utc)
+        elif now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        else:
+            now = now.astimezone(timezone.utc)
+
+        cutoff = (now - timedelta(hours=max_age_hours)).isoformat()
+
+        # One parameterized UPDATE. julianday() gives us date-aware
+        # comparison instead of raw string ordering, so ISO variants
+        # (fractional seconds, offsets) all compare correctly. The
+        # `created_at IS NOT NULL` clause blocks accidental expiry of
+        # malformed rows -- the runtime gate remains defense-in-depth
+        # for those.
+        cursor = self._conn.execute(
+            """
+            UPDATE approval_queue
+            SET status = 'EXPIRED'
+            WHERE status = 'APPROVED'
+              AND created_at IS NOT NULL
+              AND julianday(created_at) < julianday(?)
+            """,
+            (cutoff,),
+        )
+        self._conn.commit()
+        return cursor.rowcount
 
     def get_approved_proposals(self) -> List[Dict]:
         """Return APPROVED proposals (awaiting execution)."""
