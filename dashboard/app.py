@@ -29,6 +29,7 @@ from execution.autonomy_gate import DEFAULT_PROPOSAL_MAX_AGE_HOURS
 from market_data.alpha_vantage_price_feed import get_fx_price, get_fx_intraday
 from market_data.market_context import build_market_context
 from dashboard.approval_snapshot import load_approval_queue_snapshot
+from dashboard.theme import apply_dashboard_theme
 
 MAX_ALLOWED_EXPOSURE = 100.0
 
@@ -81,6 +82,7 @@ st.set_page_config(
     page_title="AegisFX Dashboard",
     layout="wide",
 )
+apply_dashboard_theme(st)
 
 st.title("AegisFX Trading Dashboard")
 
