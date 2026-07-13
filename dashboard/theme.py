@@ -61,6 +61,134 @@ def build_global_css() -> str:
     backdrop-filter: blur(12px);
 }}
 
+.aegis-hero {{
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.85rem;
+    padding: 1.75rem 2rem;
+    overflow: hidden;
+    background-color: {palette["card_background"]};
+    background-image:
+        radial-gradient(circle at 88% 12%, rgba(167, 139, 250, 0.2), transparent 38%),
+        linear-gradient(120deg, rgba(34, 211, 238, 0.14), transparent 58%);
+    border: 1px solid {palette["card_border"]};
+    border-top: 2px solid {palette["primary"]};
+    border-radius: 18px;
+}}
+
+.aegis-hero__eyebrow {{
+    color: {palette["primary"]};
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+}}
+
+.aegis-hero__subtitle {{
+    max-width: 48rem;
+    margin: 0;
+    color: {palette["muted_text"]};
+    font-size: 1rem;
+    line-height: 1.6;
+}}
+
+.aegis-section-kicker {{
+    display: block;
+    margin: 0 0 0.65rem;
+    color: {palette["muted_text"]};
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}}
+
+.aegis-proposal-card {{
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.7rem;
+    width: 100%;
+    min-height: 8rem;
+    margin: 0 0 0.75rem;
+    padding: 1rem;
+    overflow-wrap: anywhere;
+    background: {palette["card_background"]};
+    border: 1px solid {palette["card_border"]};
+    border-left-width: 3px;
+    border-radius: 12px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.14);
+    backdrop-filter: blur(12px);
+    transition: border-color 140ms ease, box-shadow 140ms ease,
+        transform 140ms ease;
+}}
+
+.aegis-proposal-card:hover {{
+    box-shadow: 0 11px 26px rgba(0, 0, 0, 0.2);
+    transform: translateY(-2px);
+}}
+
+.aegis-proposal-card__top {{
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    width: 100%;
+}}
+
+.aegis-proposal-card__pair {{
+    color: {palette["text"]};
+    font-size: 1.02rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+}}
+
+.aegis-proposal-card__meta {{
+    color: {palette["muted_text"]};
+    font-size: 0.82rem;
+    line-height: 1.5;
+}}
+
+.aegis-proposal-card--warning {{
+    border-left-color: {palette["warning"]};
+}}
+
+.aegis-proposal-card--success {{
+    border-left-color: {palette["success"]};
+}}
+
+.aegis-proposal-card--primary {{
+    border-left-color: {palette["primary"]};
+}}
+
+.aegis-proposal-card--expired {{
+    border-left-color: {palette["expired"]};
+}}
+
+.aegis-status-tile {{
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0.75rem;
+    width: 100%;
+    min-height: 7rem;
+    padding: 1rem;
+    background: {palette["card_background"]};
+    border: 1px solid {palette["card_border"]};
+    border-radius: 12px;
+    backdrop-filter: blur(12px);
+}}
+
+.aegis-status-tile__label {{
+    color: {palette["muted_text"]};
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}}
+
 /* Streamlit metric cards and values. */
 [data-testid="stMetric"] {{
     background: {palette["card_background"]};
@@ -125,7 +253,7 @@ def build_global_css() -> str:
 hr {{
     border: 0;
     border-top: 1px solid {palette["card_border"]};
-    margin: 1.25rem 0;
+    margin: 1rem 0;
 }}
 
 @media (prefers-reduced-motion: reduce) {{
@@ -144,6 +272,27 @@ hr {{
     [data-testid="stMetric"] {{
         border-radius: 10px;
         padding: 0.7rem 0.8rem;
+    }}
+
+    .aegis-hero {{
+        gap: 0.7rem;
+        padding: 1.15rem;
+    }}
+
+    .aegis-proposal-card,
+    .aegis-status-tile {{
+        width: 100%;
+        min-height: auto;
+        padding: 0.9rem;
+    }}
+
+    .aegis-proposal-card__top {{
+        flex-direction: column;
+        gap: 0.45rem;
+    }}
+
+    .aegis-proposal-card__meta {{
+        max-width: 100%;
     }}
 
     [data-testid="stMetricValue"] {{
