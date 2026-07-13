@@ -114,6 +114,19 @@ def test_preview_model_is_deterministic_data_without_callbacks():
         "approval_queue",
         "system_status",
     }
+    risk_metric = next(
+        metric for metric in first["metrics"]
+        if metric["label"] == "Risk Utilization"
+    )
+    expected_risk_metric = {
+        "label": "Risk Utilization",
+        "value": "37%",
+        "delta": None,
+        "supporting_text": "Within limits",
+    }
+    assert {
+        key: risk_metric.get(key) for key in expected_risk_metric
+    } == expected_risk_metric
     _assert_no_callables(first)
 
 
@@ -169,6 +182,20 @@ def test_preview_renderer_records_visual_components_without_callbacks():
     assert calls_by_name.get("caption")
     assert calls_by_name.get("dataframe")
 
+    risk_metric_calls = [
+        (args, kwargs)
+        for args, kwargs in calls_by_name["metric"]
+        if args and args[0] == "Risk Utilization"
+    ]
+    assert len(risk_metric_calls) == 1
+    risk_args, risk_kwargs = risk_metric_calls[0]
+    risk_delta = risk_kwargs.get("delta", risk_args[2] if len(risk_args) > 2 else None)
+    assert risk_delta is None
+    assert any(
+        args and "Within limits" in str(args[0])
+        for args, _kwargs in calls_by_name["caption"]
+    )
+
     pill_markdown = [
         (args, kwargs)
         for args, kwargs in calls_by_name.get("markdown", [])
@@ -177,6 +204,20 @@ def test_preview_renderer_records_visual_components_without_callbacks():
         and "aegis-status-pill" in str(args[0])
     ]
     assert pill_markdown
+
+    status_tiles = [
+        str(args[0])
+        for args, kwargs in calls_by_name.get("markdown", [])
+        if kwargs.get("unsafe_allow_html") is True
+        and args
+        and "aegis-status-tile" in str(args[0])
+    ]
+    assert len(status_tiles) == 4
+    assert all("aegis-status-tile__label" in fragment for fragment in status_tiles)
+    assert all("aegis-status-tile__value" in fragment for fragment in status_tiles)
+    combined_status_tiles = " ".join(status_tiles)
+    for label in ("Broker", "Risk Engine", "AI Consensus", "Autonomy"):
+        assert label in combined_status_tiles
 
     button_calls = calls_by_name.get("button", [])
     assert len([call for call in button_calls if call[1].get("type") == "primary"]) == 1
