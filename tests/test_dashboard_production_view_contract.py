@@ -301,3 +301,47 @@ def test_production_view_dispatches_execute_once_when_pressed():
 
     assert action_calls == [("execute", APPROVED)]
     assert action_calls[0][1] is APPROVED
+
+
+def test_production_view_formats_all_confidence_values_as_percentages():
+    from dashboard.production_view import (
+        render_approved_proposal_row,
+        render_pending_proposal_row,
+        render_recent_decision_row,
+    )
+
+    spy = _StreamlitSpy()
+
+    render_pending_proposal_row(
+        spy,
+        PENDING,
+        on_approve=lambda proposal_id: None,
+        on_reject=lambda proposal_id: None,
+    )
+    render_approved_proposal_row(
+        spy,
+        APPROVED,
+        on_execute=lambda proposal: None,
+    )
+    render_recent_decision_row(
+        spy,
+        RECENT,
+        tone="primary",
+    )
+
+    markdown_fragments = [
+        str(args[0]) for _, _, args, _ in _calls(spy, "markdown")
+    ]
+    pending_fragment = unescape(
+        next(fragment for fragment in markdown_fragments if "EUR/USD" in fragment)
+    )
+    approved_fragment = unescape(
+        next(fragment for fragment in markdown_fragments if "GBP/USD" in fragment)
+    )
+    recent_fragment = unescape(
+        next(fragment for fragment in markdown_fragments if "AUD/USD" in fragment)
+    )
+
+    assert "Confidence 88%" in pending_fragment
+    assert "Confidence 91%" in approved_fragment
+    assert "Confidence 79%" in recent_fragment

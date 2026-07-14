@@ -29,6 +29,12 @@ from execution.autonomy_gate import DEFAULT_PROPOSAL_MAX_AGE_HOURS
 from market_data.alpha_vantage_price_feed import get_fx_price, get_fx_intraday
 from market_data.market_context import build_market_context
 from dashboard.approval_snapshot import load_approval_queue_snapshot
+from dashboard.production_view import (
+    render_approved_proposal_row,
+    render_pending_proposal_row,
+    render_production_hero,
+    render_recent_decision_row,
+)
 from dashboard.theme import apply_dashboard_theme
 
 MAX_ALLOWED_EXPOSURE = 100.0
@@ -117,34 +123,24 @@ drawdown_pct = ((peak_equity - equity) / peak_equity * 100) if peak_equity > 0 e
 # Action signal — drawdown overrides P&L (systemic health > current moment)
 if drawdown_pct >= 4.0:
     signal_text = "DRAWDOWN WARNING"
-    signal_color = "red"
-    pnl_color = "#FF4444"
 elif unrealized_pnl > 0:
     signal_text = "PROFIT"
-    signal_color = "green"
-    pnl_color = "#00CC66"
 else:
     signal_text = "LOSS"
-    signal_color = "orange"
-    pnl_color = "#FFAA00"
 
 pnl_sign = "+" if unrealized_pnl >= 0 else ""
+signal_tone = {
+    "DRAWDOWN WARNING": "danger",
+    "PROFIT": "success",
+    "LOSS": "warning",
+}[signal_text]
 
-st.markdown(
-    f"""
-    <div style="text-align:center; padding: 20px; border-radius: 10px;
-                border: 2px solid {pnl_color}; margin-bottom: 20px;">
-        <span style="background-color:{pnl_color}; color:white; padding:4px 16px;
-                     border-radius:4px; font-size:14px; font-weight:bold;">
-            {signal_text}
-        </span>
-        <div style="font-size:48px; font-weight:bold; color:{pnl_color}; margin:10px 0;">
-            {pnl_sign}${unrealized_pnl:,.2f}
-        </div>
-        <div style="font-size:14px; color:#888;">Unrealized P&L</div>
-    </div>
-    """,
-    unsafe_allow_html=True,
+render_production_hero(
+    st,
+    label="UNREALIZED P&L",
+    value=f"{pnl_sign}${unrealized_pnl:,.2f}",
+    status_label=signal_text,
+    status_tone=signal_tone,
 )
 
 pnl_col1, pnl_col2, pnl_col3 = st.columns(3)
@@ -563,34 +559,26 @@ except Exception as e:
 if pending_proposals:
     st.caption(f"{len(pending_proposals)} pending proposal(s) — awaiting decision")
 
+    def _approve_pending_proposal(proposal_id: str) -> None:
+        aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
+        aq.approve_proposal(proposal_id)
+        aq.close()
+        st.rerun()
+
+    def _reject_pending_proposal(proposal_id: str) -> None:
+        aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
+        aq.reject_proposal(proposal_id)
+        aq.close()
+        st.rerun()
+
     for p in pending_proposals:
         with st.container():
-            cols = st.columns([3, 1, 1])
-            with cols[0]:
-                st.markdown(
-                    f"**{p['pair']}** {p['direction']} | "
-                    f"size {p['suggested_size']} | "
-                    f"conf {p['confidence']}% | "
-                    f"{p['strategy']}"
-                )
-                st.caption(p["reason"])
-                st.markdown(
-                    "<span style='background-color:#FFAA00; color:white; padding:2px 8px; "
-                    "border-radius:3px; font-size:11px;'>PENDING</span>",
-                    unsafe_allow_html=True,
-                )
-            with cols[1]:
-                if st.button("Approve", key=f"approve_{p['proposal_id']}"):
-                    aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
-                    aq.approve_proposal(p["proposal_id"])
-                    aq.close()
-                    st.rerun()
-            with cols[2]:
-                if st.button("Reject", key=f"reject_{p['proposal_id']}"):
-                    aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
-                    aq.reject_proposal(p["proposal_id"])
-                    aq.close()
-                    st.rerun()
+            render_pending_proposal_row(
+                st,
+                p,
+                on_approve=_approve_pending_proposal,
+                on_reject=_reject_pending_proposal,
+            )
 else:
     st.info("No proposals pending approval.")
 
@@ -598,67 +586,53 @@ else:
 if approved_proposals:
     st.caption(f"{len(approved_proposals)} approved proposal(s) — awaiting execution")
 
+    def _execute_approved_proposal(proposal) -> None:
+        if not broker:
+            st.error("Broker not connected — cannot execute.")
+        else:
+            try:
+                exec_orchestrator = TradeOrchestrator(broker)
+                bridge_result = ProposalExecutionBridge.execute_approved_proposal(
+                    proposal=proposal,
+                    orchestrator=exec_orchestrator,
+                    state_manager=state_manager,
+                    max_currency_exposure=MAX_ALLOWED_EXPOSURE,
+                )
+
+                if bridge_result["success"]:
+                    aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
+                    aq.mark_executed(proposal["proposal_id"])
+                    aq.close()
+                    st.success(f"Executed: {bridge_result['message']}")
+                else:
+                    st.error(f"Execution failed: {bridge_result['message']}")
+            except Exception as e:
+                st.error(f"Execution error: {str(e)}")
+
+            st.rerun()
+
     for p in approved_proposals:
         with st.container():
-            cols = st.columns([3, 1])
-            with cols[0]:
-                st.markdown(
-                    f"**{p['pair']}** {p['direction']} | "
-                    f"size {p['suggested_size']} | "
-                    f"conf {p['confidence']}% | "
-                    f"{p['strategy']}"
-                )
-                st.caption(p["reason"])
-                st.markdown(
-                    "<span style='background-color:#00CC66; color:white; padding:2px 8px; "
-                    "border-radius:3px; font-size:11px;'>APPROVED</span>",
-                    unsafe_allow_html=True,
-                )
-            with cols[1]:
-                if st.button("Execute Trade", key=f"execute_{p['proposal_id']}"):
-                    if not broker:
-                        st.error("Broker not connected — cannot execute.")
-                    else:
-                        try:
-                            exec_orchestrator = TradeOrchestrator(broker)
-                            bridge_result = ProposalExecutionBridge.execute_approved_proposal(
-                                proposal=p,
-                                orchestrator=exec_orchestrator,
-                                state_manager=state_manager,
-                                max_currency_exposure=MAX_ALLOWED_EXPOSURE,
-                            )
-
-                            if bridge_result["success"]:
-                                aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
-                                aq.mark_executed(p["proposal_id"])
-                                aq.close()
-                                st.success(f"Executed: {bridge_result['message']}")
-                            else:
-                                st.error(f"Execution failed: {bridge_result['message']}")
-                        except Exception as e:
-                            st.error(f"Execution error: {str(e)}")
-
-                        st.rerun()
+            render_approved_proposal_row(
+                st,
+                p,
+                on_execute=_execute_approved_proposal,
+            )
 
 if recent_decisions:
     st.caption("Recent Decisions")
     for d in recent_decisions:
-        status = d["status"]
-        if status == "APPROVED":
-            color = "#00CC66"
-        elif status == "EXECUTED":
-            color = "#0066CC"
-        elif status == "REJECTED":
-            color = "#FF4444"
-        else:
-            color = "#888888"
+        recent_tone = {
+            "APPROVED": "success",
+            "EXECUTED": "primary",
+            "REJECTED": "danger",
+            "EXPIRED": "expired",
+        }.get(str(d["status"]), "muted")
 
-        st.markdown(
-            f"<span style='background-color:{color}; color:white; padding:2px 8px; "
-            f"border-radius:3px; font-size:11px; font-weight:bold;'>{status}</span> "
-            f"**{d['pair']}** {d['direction']} | size {d['suggested_size']} | "
-            f"conf {d['confidence']}% | reviewed: {d['reviewed_at'][:19] if d['reviewed_at'] else '-'}",
-            unsafe_allow_html=True,
+        render_recent_decision_row(
+            st,
+            d,
+            tone=recent_tone,
         )
 
 st.divider()
