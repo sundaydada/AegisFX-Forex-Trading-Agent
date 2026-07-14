@@ -34,6 +34,7 @@ from dashboard.production_view import (
     render_pending_proposal_row,
     render_production_hero,
     render_recent_decision_row,
+    render_system_status_tiles,
 )
 from dashboard.theme import apply_dashboard_theme
 
@@ -1071,10 +1072,37 @@ with alerts_col:
         unsafe_allow_html=True,
     )
 
-    st.metric("Circuit Breaker", "ACTIVE" if circuit_breaker_active else "INACTIVE")
-    st.metric("Broker Connection", "CONNECTED" if broker_connected else "DISCONNECTED")
-    st.metric("Pending Trades", pending_count)
-    st.metric("Last Successful Trade", last_success)
+    system_statuses = [
+        {
+            "label": "Circuit Breaker",
+            "value": "ACTIVE" if circuit_breaker_active else "INACTIVE",
+            "tone": "danger" if circuit_breaker_active else "success",
+        },
+        {
+            "label": "Broker Connection",
+            "value": "CONNECTED" if broker_connected else "DISCONNECTED",
+            "tone": "success" if broker_connected else "danger",
+        },
+        {
+            "label": "Pending Trades",
+            "value": str(pending_count),
+            "tone": "warning" if pending_count > 0 else "success",
+        },
+        {
+            "label": "Last Successful Trade",
+            "value": str(last_success),
+            "tone": (
+                "expired"
+                if str(last_success) == "None"
+                else "muted"
+            ),
+        },
+    ]
+
+    render_system_status_tiles(
+        st,
+        system_statuses,
+    )
 
     # Recent alerts — derived from current state
     alerts = []
