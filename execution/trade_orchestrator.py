@@ -253,6 +253,7 @@ class TradeOrchestrator:
             "currency_pair": proposed_trade["currency_pair"],
             "direction": proposed_trade["direction"],
             "position_size": proposed_trade["approved_position_size"],
+            "stop_loss_price": proposed_trade["stop_loss_price"],
         }
 
         logger.info({"event": "executing_trade", "request_id": request_id})
