@@ -1,6 +1,8 @@
 import logging
 from typing import Dict
 
+from execution.proposal_sizing import size_trade_proposal
+
 logger = logging.getLogger("aegisfx.proposal_bridge")
 
 
@@ -17,6 +19,10 @@ class ProposalExecutionBridge:
         orchestrator,
         state_manager,
         max_currency_exposure: float = 10.0,
+        account_snapshot=None,
+        entry_price=None,
+        stop_distance_pips=None,
+        drawdown_fraction=None,
     ) -> Dict:
         """
         Execute an APPROVED proposal via the orchestrator pipeline.
@@ -66,20 +72,50 @@ class ProposalExecutionBridge:
         direction_map = {"LONG": "Long", "SHORT": "Short"}
         orchestrator_direction = direction_map.get(ai_direction, ai_direction)
 
-        proposed_trade = {
-            "currency_pair": proposal.get("pair", ""),
-            "direction": orchestrator_direction,
-            "approved_position_size": float(proposal.get("suggested_size", 0.0)),
-        }
-
         # Sanity check on required fields
-        if not proposed_trade["currency_pair"] or not proposed_trade["direction"]:
+        if not proposal.get("pair", "") or not orchestrator_direction:
             return {
                 "success": False,
                 "message": "Proposal missing required fields",
                 "request_id": request_id,
                 "execution_result": {},
             }
+
+        sizing_inputs = {
+            "account_snapshot": account_snapshot,
+            "entry_price": entry_price,
+            "stop_distance_pips": stop_distance_pips,
+            "drawdown_fraction": drawdown_fraction,
+        }
+        missing_sizing_inputs = [
+            name for name, value in sizing_inputs.items()
+            if value is None
+        ]
+        if missing_sizing_inputs:
+            return {
+                "success": False,
+                "message": (
+                    "Missing required sizing input: "
+                    + ", ".join(missing_sizing_inputs)
+                ),
+                "request_id": request_id,
+                "execution_result": {},
+            }
+
+        sizing = size_trade_proposal(
+            account_snapshot=account_snapshot,
+            pair=proposal["pair"],
+            side=proposal["direction"],
+            entry_price=entry_price,
+            stop_distance_pips=stop_distance_pips,
+            drawdown_fraction=drawdown_fraction,
+        )
+        proposed_trade = {
+            "currency_pair": sizing.pair,
+            "direction": direction_map.get(sizing.side, sizing.side),
+            "approved_position_size": sizing.units,
+            "stop_loss_price": sizing.stop_loss_price,
+        }
 
         # Hand off to orchestrator — orchestrator enforces all deterministic controls
         try:
