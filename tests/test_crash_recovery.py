@@ -35,6 +35,9 @@ class MockBrokerCrashRecovery(BrokerInterface):
     def get_account_balance(self) -> float:
         raise NotImplementedError
 
+    def get_account_snapshot(self):
+        raise NotImplementedError
+
     def get_order_status(self, request_id: str) -> Dict:
         return {
             "execution_status": "Filled",

@@ -1,8 +1,36 @@
 import urllib.request
 import json
+import math
+from collections.abc import Mapping
+from numbers import Real
 from typing import Dict, List
-from brokers.broker_interface import BrokerInterface
+from brokers.broker_interface import AccountSnapshot, BrokerInterface
 from brokers.broker_health import BrokerHealthMonitor
+
+
+def _parse_account_number(
+    field_name: str,
+    value,
+    *,
+    strictly_positive: bool,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (str, Real)):
+        raise ValueError(f"account field {field_name!r} must be numeric")
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"account field {field_name!r} must be numeric"
+        ) from exc
+
+    if not math.isfinite(parsed):
+        raise ValueError(f"account field {field_name!r} must be finite")
+    if strictly_positive and parsed <= 0.0:
+        raise ValueError(f"account field {field_name!r} must be greater than zero")
+    if not strictly_positive and parsed < 0.0:
+        raise ValueError(f"account field {field_name!r} must not be negative")
+    return parsed
 
 
 class OandaBroker(BrokerInterface):
@@ -218,6 +246,52 @@ class OandaBroker(BrokerInterface):
                 })
 
         return positions
+
+    def get_account_snapshot(self) -> AccountSnapshot:
+        data = self._make_request("/summary", "GET", None)
+        if not isinstance(data, Mapping):
+            raise ValueError("Account summary response must be a mapping")
+
+        account = data.get("account")
+        if not isinstance(account, Mapping):
+            raise ValueError("Account summary must contain an account mapping")
+
+        required_fields = ("NAV", "balance", "currency", "marginAvailable")
+        missing_fields = [field for field in required_fields if field not in account]
+        if missing_fields:
+            raise ValueError(
+                f"Account summary missing required field: {missing_fields[0]}"
+            )
+
+        nav = _parse_account_number(
+            "NAV",
+            account["NAV"],
+            strictly_positive=True,
+        )
+        balance = _parse_account_number(
+            "balance",
+            account["balance"],
+            strictly_positive=False,
+        )
+        margin_available = _parse_account_number(
+            "marginAvailable",
+            account["marginAvailable"],
+            strictly_positive=False,
+        )
+
+        raw_currency = account["currency"]
+        if not isinstance(raw_currency, str):
+            raise ValueError("account field 'currency' must be a string")
+        currency = raw_currency.strip().upper()
+        if not currency:
+            raise ValueError("account field 'currency' must not be empty")
+
+        return AccountSnapshot(
+            nav=nav,
+            balance=balance,
+            currency=currency,
+            margin_available=margin_available,
+        )
 
     def get_account_balance(self) -> float:
         try:

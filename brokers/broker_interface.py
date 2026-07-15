@@ -1,5 +1,14 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Dict, List
+
+
+@dataclass(frozen=True)
+class AccountSnapshot:
+    nav: float
+    balance: float
+    currency: str
+    margin_available: float
 
 
 class BrokerInterface(ABC):
@@ -39,6 +48,11 @@ class BrokerInterface(ABC):
         Returns:
             Account balance as float.
         """
+        pass
+
+    @abstractmethod
+    def get_account_snapshot(self) -> AccountSnapshot:
+        """Retrieve validated account values used for risk decisions."""
         pass
 
     @abstractmethod
