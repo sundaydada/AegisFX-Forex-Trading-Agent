@@ -132,7 +132,12 @@ class OandaBroker(BrokerInterface):
         return {"ok": True, "value": rounded}
 
     def place_order(self, order: Dict) -> Dict:
-        required_fields = ["currency_pair", "direction", "position_size"]
+        required_fields = [
+            "currency_pair",
+            "direction",
+            "position_size",
+            "stop_loss_price",
+        ]
         for field in required_fields:
             if field not in order:
                 return {
@@ -140,27 +145,61 @@ class OandaBroker(BrokerInterface):
                     "reason": f"Missing required field: {field}",
                 }
 
-        instrument = order["currency_pair"].replace("/", "_")
-        units = order["position_size"]
-        if order["direction"] == "Short":
-            units = -units
-
-        # Convert upstream float intent into OANDA-valid integer units.
-        # Reject pre-flight if the size is too small to send.
-        normalized = OandaBroker._normalize_oanda_units(units)
-        if not normalized["ok"]:
+        direction = order["direction"]
+        if direction not in ("Long", "Short"):
             return {
                 "execution_status": "Rejected",
-                "reason": normalized["reason"],
+                "reason": "Direction must be exactly 'Long' or 'Short'",
             }
+
+        position_size = order["position_size"]
+        if type(position_size) is not int or position_size <= 0:
+            return {
+                "execution_status": "Rejected",
+                "reason": "Position size must be an exact positive integer",
+            }
+
+        stop_loss_price = order["stop_loss_price"]
+        if isinstance(stop_loss_price, bool) or not isinstance(
+            stop_loss_price,
+            Real,
+        ):
+            return {
+                "execution_status": "Rejected",
+                "reason": "Stop-loss price must be a finite positive number",
+            }
+
+        try:
+            parsed_stop_loss = float(stop_loss_price)
+        except (TypeError, ValueError, OverflowError):
+            return {
+                "execution_status": "Rejected",
+                "reason": "Stop-loss price must be a finite positive number",
+            }
+
+        if not math.isfinite(parsed_stop_loss) or parsed_stop_loss <= 0.0:
+            return {
+                "execution_status": "Rejected",
+                "reason": "Stop-loss price must be a finite positive number",
+            }
+
+        instrument = order["currency_pair"].replace("/", "_")
+        signed_units = (
+            str(position_size)
+            if direction == "Long"
+            else str(-position_size)
+        )
 
         payload = {
             "order": {
                 "type": "MARKET",
                 "instrument": instrument,
-                "units": str(normalized["value"]),
+                "units": signed_units,
                 "timeInForce": "FOK",
                 "positionFill": "DEFAULT",
+                "stopLossOnFill": {
+                    "price": str(stop_loss_price),
+                },
             }
         }
 
