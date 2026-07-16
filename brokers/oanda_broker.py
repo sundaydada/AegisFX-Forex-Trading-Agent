@@ -2,6 +2,7 @@ import urllib.request
 import json
 import math
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from numbers import Real
 from typing import Dict, List
 from brokers.broker_interface import AccountSnapshot, BrokerInterface
@@ -31,6 +32,61 @@ def _parse_account_number(
     if not strictly_positive and parsed < 0.0:
         raise ValueError(f"account field {field_name!r} must not be negative")
     return parsed
+
+
+def _normalize_repo_pair(pair) -> str:
+    if not isinstance(pair, str):
+        raise ValueError("currency pair must be a BASE/QUOTE string")
+
+    normalized = pair.upper()
+    base, separator, quote = normalized.partition("/")
+    if separator != "/" or len(base) != 3 or len(quote) != 3:
+        raise ValueError(
+            f"currency pair {pair!r} must be exactly BASE/QUOTE"
+        )
+    if not (base.isalpha() and quote.isalpha()):
+        raise ValueError(
+            f"currency pair {pair!r} must use three-letter currencies"
+        )
+    return normalized
+
+
+def _parse_quote_price(field_name: str, value) -> float:
+    if isinstance(value, bool) or not isinstance(value, (str, Real)):
+        raise ValueError(f"quote field {field_name!r} must be numeric")
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"quote field {field_name!r} must be numeric"
+        ) from exc
+
+    if not math.isfinite(parsed):
+        raise ValueError(f"quote field {field_name!r} must be finite")
+    if parsed <= 0.0:
+        raise ValueError(
+            f"quote field {field_name!r} must be greater than zero"
+        )
+    return parsed
+
+
+def _parse_quote_time(value) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("quote field 'time' must be an RFC3339 string")
+
+    # Accept "...Z" (UTC zulu) as well as "+00:00"
+    normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(
+            "quote field 'time' is not a valid RFC3339 timestamp"
+        ) from exc
+
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("quote field 'time' must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
 
 
 class OandaBroker(BrokerInterface):
@@ -331,6 +387,69 @@ class OandaBroker(BrokerInterface):
             currency=currency,
             margin_available=margin_available,
         )
+
+    def get_quote(self, pair: str) -> Dict:
+        """
+        Fetch a live closeout bid/ask quote for a repo-format pair.
+
+        Args:
+            pair: Currency pair in repository format, e.g. "EUR/USD"
+
+        Returns:
+            {
+                "currency_pair": "EUR/USD",
+                "bid": float,
+                "ask": float,
+                "timestamp": timezone-aware UTC datetime,
+            }
+
+        Raises ValueError on malformed quote evidence. Transport
+        failures from the OANDA API propagate as RuntimeError.
+        """
+        normalized_pair = _normalize_repo_pair(pair)
+        instrument = normalized_pair.replace("/", "_")
+
+        data = self._make_request(
+            f"/pricing?instruments={instrument}",
+            "GET",
+            None,
+        )
+
+        if not isinstance(data, Mapping):
+            raise ValueError("quote response must be a mapping")
+
+        prices = data.get("prices")
+        if not isinstance(prices, list) or not prices:
+            raise ValueError(
+                "quote response must contain a nonempty 'prices' list"
+            )
+
+        entry = prices[0]
+        if not isinstance(entry, Mapping):
+            raise ValueError("quote price entry must be a mapping")
+
+        entry_instrument = entry.get("instrument")
+        if entry_instrument != instrument:
+            raise ValueError(
+                f"quote instrument mismatch: expected {instrument},"
+                f" got {entry_instrument!r}"
+            )
+
+        bid = _parse_quote_price("closeoutBid", entry.get("closeoutBid"))
+        ask = _parse_quote_price("closeoutAsk", entry.get("closeoutAsk"))
+        if ask < bid:
+            raise ValueError(
+                "quote closeoutAsk must not be below closeoutBid"
+            )
+
+        timestamp = _parse_quote_time(entry.get("time"))
+
+        return {
+            "currency_pair": normalized_pair,
+            "bid": bid,
+            "ask": ask,
+            "timestamp": timestamp,
+        }
 
     def get_account_balance(self) -> float:
         try:
