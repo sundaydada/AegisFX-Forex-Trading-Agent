@@ -1,6 +1,8 @@
 import os
 import sys
 import time
+from datetime import datetime, timezone
+
 import streamlit as st
 import pandas as pd
 
@@ -20,12 +22,13 @@ from ai.strategy_recommendation_service import StrategyRecommendationService
 from ai.regime_transition_tracker import RegimeTransitionTracker
 from ai.trade_proposal_service import TradeProposalService
 from ai.proposal_approval_queue import ProposalApprovalQueue
-from ai.proposal_execution_bridge import ProposalExecutionBridge
 from ai.proposal_analytics import ProposalAnalytics
 from ai.strategy_attribution import StrategyAttributionAnalytics
 from ai.recommendation_accuracy import RecommendationAccuracyAnalytics
-from execution.trade_orchestrator import TradeOrchestrator
 from execution.autonomy_gate import DEFAULT_PROPOSAL_MAX_AGE_HOURS
+from dashboard.reviewed_execution_controller import (
+    execute_reviewed_proposal_from_dashboard,
+)
 from market_data.alpha_vantage_price_feed import get_fx_price, get_fx_intraday
 from market_data.market_context import build_market_context
 from dashboard.approval_snapshot import load_approval_queue_snapshot
@@ -39,6 +42,7 @@ from dashboard.production_view import (
 from dashboard.theme import apply_dashboard_theme
 
 MAX_ALLOWED_EXPOSURE = 100.0
+MAX_QUOTE_AGE_SECONDS = 60.0
 
 
 @st.cache_data(ttl=30)
@@ -99,11 +103,14 @@ broker_health = BrokerHealthMonitor()
 broker = None
 balance = 0.0
 positions = []
+OANDA_API_KEY = os.getenv("OANDA_DEMO_API_KEY", "")
+OANDA_ACCOUNT_ID = os.getenv("OANDA_ACCOUNT_ID", "")
+OANDA_BASE_URL = "https://api-fxpractice.oanda.com"
 try:
     broker = OandaBroker(
-        api_key=os.getenv("OANDA_DEMO_API_KEY", ""),
-        account_id=os.getenv("OANDA_ACCOUNT_ID", ""),
-        base_url="https://api-fxpractice.oanda.com",
+        api_key=OANDA_API_KEY,
+        account_id=OANDA_ACCOUNT_ID,
+        base_url=OANDA_BASE_URL,
         health=broker_health,
     )
     balance = broker.get_account_balance()
@@ -155,6 +162,11 @@ st.divider()
 DB_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "dry_run_sustained.db",
+)
+
+DRAWDOWN_DB_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "drawdown_high_water.db",
 )
 
 log_db_path_once("dashboard", DB_PATH)
@@ -587,37 +599,50 @@ else:
 if approved_proposals:
     st.caption(f"{len(approved_proposals)} approved proposal(s) — awaiting execution")
 
-    def _execute_approved_proposal(proposal) -> None:
-        if not broker:
-            st.error("Broker not connected — cannot execute.")
+    def _execute_approved_proposal(proposal, raw_stop_loss_price) -> None:
+        try:
+            result = execute_reviewed_proposal_from_dashboard(
+                proposal=proposal,
+                raw_stop_loss_price=raw_stop_loss_price,
+                api_key=OANDA_API_KEY,
+                account_id=OANDA_ACCOUNT_ID,
+                base_url=OANDA_BASE_URL,
+                trade_state_db_path=DB_PATH,
+                drawdown_db_path=DRAWDOWN_DB_PATH,
+                approval_db_path="proposal_approvals.db",
+                max_currency_exposure=MAX_ALLOWED_EXPOSURE,
+                max_quote_age_seconds=MAX_QUOTE_AGE_SECONDS,
+                now_utc=datetime.now(timezone.utc),
+            )
+        except Exception as e:
+            st.error(f"Execution error: {str(e)}")
         else:
-            try:
-                exec_orchestrator = TradeOrchestrator(broker)
-                bridge_result = ProposalExecutionBridge.execute_approved_proposal(
-                    proposal=proposal,
-                    orchestrator=exec_orchestrator,
-                    state_manager=state_manager,
-                    max_currency_exposure=MAX_ALLOWED_EXPOSURE,
-                )
+            if isinstance(result, dict) and result.get("success") is True:
+                st.success(f"Executed: {result.get('message', '')}")
+            else:
+                failure_message = ""
+                if isinstance(result, dict):
+                    failure_message = str(result.get("message", ""))
+                st.error(f"Execution failed: {failure_message}")
 
-                if bridge_result["success"]:
-                    aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
-                    aq.mark_executed(proposal["proposal_id"])
-                    aq.close()
-                    st.success(f"Executed: {bridge_result['message']}")
-                else:
-                    st.error(f"Execution failed: {bridge_result['message']}")
-            except Exception as e:
-                st.error(f"Execution error: {str(e)}")
-
-            st.rerun()
+        st.rerun()
 
     for p in approved_proposals:
         with st.container():
+            raw_stop_loss_price = st.text_input(
+                "Protective stop-loss price",
+                value="",
+                key=f"stop_loss_price_{p['proposal_id']}",
+                help="Enter the absolute price. Example: 1.07250",
+            )
             render_approved_proposal_row(
                 st,
                 p,
-                on_execute=_execute_approved_proposal,
+                on_execute=(
+                    lambda selected_proposal, raw_stop=raw_stop_loss_price: (
+                        _execute_approved_proposal(selected_proposal, raw_stop)
+                    )
+                ),
             )
 
 if recent_decisions:
