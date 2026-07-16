@@ -34,6 +34,7 @@ def test_reviewed_execution_mvp_completes_with_fake_broker(
 
     trade_db_path = str(tmp_path / "trade-state.db")
     drawdown_db_path = str(tmp_path / "drawdown.db")
+    start_of_day_nav_db_path = str(tmp_path / "start-of-day-nav.db")
     approval_db_path = str(tmp_path / "approvals.db")
 
     # Isolate operator machine state: the orchestrator's real
@@ -46,6 +47,7 @@ def test_reviewed_execution_mvp_completes_with_fake_broker(
     )
 
     constructed_brokers = []
+    account_snapshot_calls = []
     submitted_orders = []
 
     class _FakeBroker:
@@ -55,6 +57,7 @@ def test_reviewed_execution_mvp_completes_with_fake_broker(
             )
 
         def get_account_snapshot(self):
+            account_snapshot_calls.append(True)
             return AccountSnapshot(
                 nav=100_000.0,
                 balance=100_000.0,
@@ -113,6 +116,7 @@ def test_reviewed_execution_mvp_completes_with_fake_broker(
         base_url="https://example.invalid",
         trade_state_db_path=trade_db_path,
         drawdown_db_path=drawdown_db_path,
+        start_of_day_nav_db_path=start_of_day_nav_db_path,
         approval_db_path=approval_db_path,
         max_currency_exposure=100.0,
         max_quote_age_seconds=60.0,
@@ -124,6 +128,7 @@ def test_reviewed_execution_mvp_completes_with_fake_broker(
 
     assert len(constructed_brokers) == 1
     assert constructed_brokers[0]["base_url"] == "https://example.invalid"
+    assert len(account_snapshot_calls) == 1
 
     assert len(submitted_orders) == 1
     order = submitted_orders[0]
@@ -173,7 +178,29 @@ def test_reviewed_execution_mvp_completes_with_fake_broker(
         conn.close()
     assert drawdown_rows == [("TEST-ACCOUNT", "USD", 100_000.0)]
 
-    for db_path in (trade_db_path, drawdown_db_path, approval_db_path):
+    conn = sqlite3.connect(start_of_day_nav_db_path)
+    try:
+        daily_nav_rows = conn.execute(
+            "SELECT account_id, account_currency, utc_date,"
+            " start_of_day_nav FROM start_of_day_nav"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert daily_nav_rows == [
+        (
+            "TEST-ACCOUNT",
+            "USD",
+            _NOW_UTC.date().isoformat(),
+            100_000.0,
+        )
+    ]
+
+    for db_path in (
+        trade_db_path,
+        drawdown_db_path,
+        start_of_day_nav_db_path,
+        approval_db_path,
+    ):
         assert db_path.startswith(str(tmp_path))
 
     assert "dashboard.app" not in sys.modules
