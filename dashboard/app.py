@@ -169,6 +169,11 @@ DRAWDOWN_DB_PATH = os.path.join(
     "drawdown_high_water.db",
 )
 
+START_OF_DAY_NAV_DB_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "start_of_day_nav.db",
+)
+
 log_db_path_once("dashboard", DB_PATH)
 state_manager = PersistentTradeStateManager(db_path=DB_PATH)
 all_trades = state_manager.get_all_trades()
@@ -609,6 +614,7 @@ if approved_proposals:
                 base_url=OANDA_BASE_URL,
                 trade_state_db_path=DB_PATH,
                 drawdown_db_path=DRAWDOWN_DB_PATH,
+                start_of_day_nav_db_path=START_OF_DAY_NAV_DB_PATH,
                 approval_db_path="proposal_approvals.db",
                 max_currency_exposure=MAX_ALLOWED_EXPOSURE,
                 max_quote_age_seconds=MAX_QUOTE_AGE_SECONDS,

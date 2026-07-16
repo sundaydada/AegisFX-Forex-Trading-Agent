@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import sys
 from datetime import datetime, timezone
 
@@ -124,6 +125,12 @@ def _call_controller(module, **overrides):
         max_quote_age_seconds=60.0,
         now_utc=_NOW_UTC,
     )
+    if "start_of_day_nav_db_path" in inspect.signature(
+        module.execute_reviewed_proposal_from_dashboard
+    ).parameters:
+        controller_kwargs["start_of_day_nav_db_path"] = (
+            "unused-start-of-day-nav.db"
+        )
     controller_kwargs.update(overrides)
     return module.execute_reviewed_proposal_from_dashboard(
         **controller_kwargs
@@ -152,7 +159,12 @@ def test_controller_builds_wiring_with_exact_configuration(monkeypatch):
 
     assert len(factory.calls) == 1
     call = factory.calls[0]
-    assert set(call) == _FACTORY_KEYS
+    expected_factory_keys = set(_FACTORY_KEYS)
+    if "start_of_day_nav_db_path" in inspect.signature(
+        module.execute_reviewed_proposal_from_dashboard
+    ).parameters:
+        expected_factory_keys.add("start_of_day_nav_db_path")
+    assert set(call) == expected_factory_keys
     assert call["api_key"] == "TEST-API-KEY"
     assert call["account_id"] == "TEST-ACCOUNT"
     assert call["base_url"] == "https://example.invalid"
@@ -268,3 +280,40 @@ def test_controller_does_not_duplicate_execution_marking(monkeypatch):
     assert action.calls[0]["mark_executed"] is sentinel_mark_executed
     assert constructed_queues == []
     assert result is distinctive_result
+
+
+def test_controller_forwards_explicit_start_of_day_nav_db_path(
+    monkeypatch,
+    tmp_path,
+):
+    call_order = []
+    action_kwargs = _sentinel_action_kwargs()
+    wiring = _FakeWiring(action_kwargs, call_order=call_order)
+    factory = _RecordingFactory(wiring, call_order=call_order)
+    action = _RecordingAction(call_order=call_order)
+    module = _patched_controller(monkeypatch, factory=factory, action=action)
+    proposal = dict(_PROPOSAL)
+    daily_nav_db_path = str(tmp_path / "start-of-day-nav.db")
+
+    _call_controller(
+        module,
+        proposal=proposal,
+        raw_stop_loss_price="1.07250",
+        start_of_day_nav_db_path=daily_nav_db_path,
+    )
+
+    assert len(factory.calls) == 1
+    factory_call = factory.calls[0]
+    assert factory_call["start_of_day_nav_db_path"] is daily_nav_db_path
+
+    assert len(action.calls) == 1
+    action_call = action.calls[0]
+    assert action_call["proposal"] is proposal
+    assert action_call["raw_stop_loss_price"] == "1.07250"
+    assert "start_of_day_nav_db_path" not in action_call
+    assert "start_of_day_nav_provider" not in action_call
+    for key in _WIRING_KEYS:
+        assert action_call[key] is action_kwargs[key]
+
+    assert wiring.close_calls == 1
+    assert call_order == ["factory", "action", "close"]

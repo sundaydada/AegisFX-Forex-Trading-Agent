@@ -241,7 +241,13 @@ def test_execute_callback_delegates_once_with_exact_mvp_arguments():
     call = controller_calls[0]
 
     keywords = {kw.arg: kw.value for kw in call.keywords}
-    assert set(keywords) == _CONTROLLER_KEYWORDS
+    expected_keywords = set(_CONTROLLER_KEYWORDS)
+    if _single_name_assignment_value(
+        tree,
+        "START_OF_DAY_NAV_DB_PATH",
+    ) is not None:
+        expected_keywords.add("start_of_day_nav_db_path")
+    assert set(keywords) == expected_keywords
 
     assert isinstance(keywords["proposal"], ast.Name)
     assert keywords["proposal"].id == parameters[0]
@@ -333,3 +339,68 @@ def test_legacy_dashboard_execution_path_is_removed():
             "the ProposalExecutionBridge import has no non-execution"
             " use and must be removed"
         )
+
+
+def test_app_forwards_root_start_of_day_nav_database_path():
+    tree = _app_tree()
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "START_OF_DAY_NAV_DB_PATH"
+    ]
+    assert len(assignments) == 1
+
+    daily_path_value = assignments[0].value
+    drawdown_path_value = _single_name_assignment_value(
+        tree,
+        "DRAWDOWN_DB_PATH",
+    )
+    assert isinstance(daily_path_value, ast.Call)
+    assert isinstance(drawdown_path_value, ast.Call)
+    assert ast.dump(daily_path_value.func) == ast.dump(
+        drawdown_path_value.func
+    )
+    assert len(daily_path_value.args) == 2
+    assert len(drawdown_path_value.args) == 2
+    assert ast.dump(daily_path_value.args[0]) == ast.dump(
+        drawdown_path_value.args[0]
+    )
+    assert isinstance(daily_path_value.args[1], ast.Constant)
+    assert daily_path_value.args[1].value == "start_of_day_nav.db"
+
+    forbidden_path_sources = {
+        "getenv",
+        "text_input",
+        "selectbox",
+        "radio",
+    }
+    assert not any(
+        isinstance(node, ast.Call)
+        and _call_name(node) in forbidden_path_sources
+        for node in ast.walk(daily_path_value)
+    )
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "session_state"
+        for node in ast.walk(daily_path_value)
+    )
+
+    callback = _function_def(tree, "_execute_approved_proposal")
+    assert callback is not None
+    controller_calls = [
+        call
+        for call in _calls_in(callback)
+        if _call_name(call) == _CONTROLLER_FUNCTION
+    ]
+    assert len(controller_calls) == 1
+    daily_path_keywords = [
+        keyword
+        for keyword in controller_calls[0].keywords
+        if keyword.arg == "start_of_day_nav_db_path"
+    ]
+    assert len(daily_path_keywords) == 1
+    forwarded_value = daily_path_keywords[0].value
+    assert isinstance(forwarded_value, ast.Name)
+    assert forwarded_value.id == "START_OF_DAY_NAV_DB_PATH"
