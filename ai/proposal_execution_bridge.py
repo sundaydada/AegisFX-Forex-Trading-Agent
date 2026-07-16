@@ -115,6 +115,11 @@ class ProposalExecutionBridge:
             "direction": direction_map.get(sizing.side, sizing.side),
             "approved_position_size": sizing.units,
             "stop_loss_price": sizing.stop_loss_price,
+            "nav": sizing.nav,
+            "account_currency": sizing.account_currency,
+            "risk_fraction": sizing.risk_fraction,
+            "risk_budget_amount": sizing.risk_amount,
+            "loss_per_unit_at_stop": sizing.loss_per_unit_at_stop,
         }
 
         # Hand off to orchestrator — orchestrator enforces all deterministic controls
