@@ -27,7 +27,9 @@ This runbook permits one operator-reviewed trade in an OANDA practice/demo accou
 ## Procedure
 
 1. Confirm practice-account mode and the intended account identity without recording secrets.
-2. Launch the reviewed dashboard using the repository's approved local command.
+2. From the repository root, launch the reviewed dashboard with:
+
+       python -m streamlit run dashboard/app.py
 3. Inspect the single proposal's ID, instrument, direction, calculated integer units, monetary risk amount, current entry quote, and operator-entered absolute protective stop.
 4. Approve only when every field and the resulting risk are understood and acceptable.
 5. Submit exactly once and remain present while the result resolves.
