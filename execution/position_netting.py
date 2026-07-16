@@ -18,7 +18,12 @@ def net_position(state_manager, proposed_trade: Dict) -> Tuple[float, int]:
 
     pair = proposed_trade["currency_pair"]
     direction = proposed_trade["direction"]
-    size = float(proposed_trade["approved_position_size"])
+    proposed_size = proposed_trade["approved_position_size"]
+    size = (
+        proposed_size
+        if type(proposed_size) is int
+        else float(proposed_size)
+    )
 
     opposite = "Short" if direction == "Long" else "Long"
 
@@ -42,7 +47,12 @@ def net_position(state_manager, proposed_trade: Dict) -> Tuple[float, int]:
         if remaining <= 0:
             break
 
-        trade_size = float(trade.get("position_size", trade.get("units", 0)))
+        recorded_size = trade.get("position_size", trade.get("units", 0))
+        trade_size = (
+            recorded_size
+            if type(recorded_size) is int
+            else float(recorded_size)
+        )
         request_id = trade.get("request_id")
 
         if not request_id:
@@ -57,7 +67,11 @@ def net_position(state_manager, proposed_trade: Dict) -> Tuple[float, int]:
             # Partially close — close full trade, reduce remaining to 0
             # Partial fills not supported yet — close entire trade
             state_manager.close_trade(request_id)
-            remaining = 0.0
+            remaining = (
+                0
+                if type(remaining) is int and type(trade_size) is int
+                else 0.0
+            )
             closed_count += 1
 
     return remaining, closed_count
