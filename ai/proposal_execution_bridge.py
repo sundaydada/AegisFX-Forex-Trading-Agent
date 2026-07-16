@@ -115,6 +115,7 @@ class ProposalExecutionBridge:
             "direction": direction_map.get(sizing.side, sizing.side),
             "approved_position_size": sizing.units,
             "stop_loss_price": sizing.stop_loss_price,
+            "account_snapshot": account_snapshot,
             "nav": sizing.nav,
             "account_currency": sizing.account_currency,
             "risk_fraction": sizing.risk_fraction,

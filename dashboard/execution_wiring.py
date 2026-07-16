@@ -29,6 +29,9 @@ from brokers.oanda_broker import OandaBroker
 from execution.persistent_drawdown_provider import (
     PersistentHighWaterDrawdownProvider,
 )
+from execution.persistent_start_of_day_nav_provider import (
+    PersistentStartOfDayNavProvider,
+)
 from execution.persistent_trade_state_manager import (
     PersistentTradeStateManager,
 )
@@ -76,10 +79,18 @@ def _validated_positive_policy(name: str, value) -> float:
 class ReviewedExecutionWiring:
     """Owned dependency bundle for the reviewed-execution action."""
 
-    def __init__(self, *, action_kwargs, state_manager, drawdown_provider):
+    def __init__(
+        self,
+        *,
+        action_kwargs,
+        state_manager,
+        drawdown_provider,
+        start_of_day_nav_provider=None,
+    ):
         self.action_kwargs = action_kwargs
         self._state_manager = state_manager
         self._drawdown_provider = drawdown_provider
+        self._start_of_day_nav_provider = start_of_day_nav_provider
         self._closed = False
 
     def close(self) -> None:
@@ -89,7 +100,11 @@ class ReviewedExecutionWiring:
         try:
             self._state_manager.close()
         finally:
-            self._drawdown_provider.close()
+            try:
+                self._drawdown_provider.close()
+            finally:
+                if self._start_of_day_nav_provider is not None:
+                    self._start_of_day_nav_provider.close()
 
 
 def build_reviewed_execution_wiring(
@@ -103,6 +118,7 @@ def build_reviewed_execution_wiring(
     max_currency_exposure,
     max_quote_age_seconds,
     now_utc,
+    start_of_day_nav_db_path=None,
 ) -> ReviewedExecutionWiring:
     validated_api_key = _validated_identity("API key", api_key)
     validated_account_id = _validated_identity(
@@ -122,6 +138,12 @@ def build_reviewed_execution_wiring(
         "approval_db_path",
         approval_db_path,
     )
+    validated_start_of_day_nav_db_path = None
+    if start_of_day_nav_db_path is not None:
+        validated_start_of_day_nav_db_path = _validated_db_path(
+            "start_of_day_nav_db_path",
+            start_of_day_nav_db_path,
+        )
     validated_max_currency_exposure = _validated_positive_policy(
         "max_currency_exposure",
         max_currency_exposure,
@@ -144,17 +166,33 @@ def build_reviewed_execution_wiring(
         account_id=validated_account_id,
         base_url=validated_base_url,
     )
-    orchestrator = TradeOrchestrator(broker)
+    orchestrator = None
+    if validated_start_of_day_nav_db_path is None:
+        orchestrator = TradeOrchestrator(broker)
 
     state_manager = PersistentTradeStateManager(
         db_path=validated_trade_state_db_path
     )
     drawdown_provider = None
+    start_of_day_nav_provider = None
     try:
         drawdown_provider = PersistentHighWaterDrawdownProvider(
             db_path=validated_drawdown_db_path,
             account_id=validated_account_id,
         )
+        if validated_start_of_day_nav_db_path is not None:
+            def start_of_day_nav_clock():
+                return now_utc
+
+            start_of_day_nav_provider = PersistentStartOfDayNavProvider(
+                db_path=validated_start_of_day_nav_db_path,
+                account_id=validated_account_id,
+                clock=start_of_day_nav_clock,
+            )
+            orchestrator = TradeOrchestrator(
+                broker,
+                start_of_day_nav_provider=start_of_day_nav_provider,
+            )
 
         def mark_executed(proposal_id):
             queue = ProposalApprovalQueue(db_path=validated_approval_db_path)
@@ -189,10 +227,17 @@ def build_reviewed_execution_wiring(
             except BaseException:
                 pass
 
+        if start_of_day_nav_provider is not None:
+            try:
+                start_of_day_nav_provider.close()
+            except BaseException:
+                pass
+
         raise
 
     return ReviewedExecutionWiring(
         action_kwargs=action_kwargs,
         state_manager=state_manager,
         drawdown_provider=drawdown_provider,
+        start_of_day_nav_provider=start_of_day_nav_provider,
     )

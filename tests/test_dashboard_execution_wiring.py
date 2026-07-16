@@ -53,10 +53,11 @@ def _build_wiring(
     account_id="TEST-ACCOUNT",
     prefix="wiring",
     drawdown_db_path=None,
+    start_of_day_nav_db_path=None,
     approval_db_path=None,
 ):
     module = importlib.import_module("dashboard.execution_wiring")
-    return module.build_reviewed_execution_wiring(
+    factory_kwargs = dict(
         api_key=api_key,
         account_id=account_id,
         base_url="https://example.invalid",
@@ -75,6 +76,11 @@ def _build_wiring(
         max_quote_age_seconds=60.0,
         now_utc=_NOW_UTC,
     )
+    if start_of_day_nav_db_path is not None:
+        factory_kwargs["start_of_day_nav_db_path"] = (
+            start_of_day_nav_db_path
+        )
+    return module.build_reviewed_execution_wiring(**factory_kwargs)
 
 
 def test_wiring_module_import_is_safe():
@@ -364,3 +370,260 @@ def test_partial_construction_cleanup_preserves_original_failure(
     assert construction_record["orchestrators"] == 1
     assert len(construction_record["state_managers"]) == 1
     assert construction_record["state_managers"][0].close_attempts == 1
+
+
+def test_wiring_constructs_one_daily_nav_provider_and_injects_same_instance(
+    monkeypatch,
+    tmp_path,
+):
+    module = importlib.import_module("dashboard.execution_wiring")
+    daily_db_path = str(tmp_path / "daily-nav.db")
+    providers = []
+    orchestrators = []
+
+    class _RecordingDailyProvider:
+        def __init__(self, *, db_path, account_id, clock):
+            self.db_path = db_path
+            self.account_id = account_id
+            self.clock = clock
+            self.close_calls = 0
+            providers.append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    class _RecordingOrchestrator:
+        def __init__(
+            self,
+            broker,
+            *,
+            start_of_day_nav_provider=None,
+        ):
+            self.broker = broker
+            self.start_of_day_nav_provider = start_of_day_nav_provider
+            orchestrators.append(self)
+
+    monkeypatch.setattr(
+        module,
+        "PersistentStartOfDayNavProvider",
+        _RecordingDailyProvider,
+        raising=False,
+    )
+    monkeypatch.setattr(module, "TradeOrchestrator", _RecordingOrchestrator)
+
+    wiring = _build_wiring(
+        tmp_path,
+        start_of_day_nav_db_path=daily_db_path,
+    )
+    try:
+        assert len(providers) == 1
+        provider = providers[0]
+        assert provider.db_path == daily_db_path
+        assert provider.account_id == "TEST-ACCOUNT"
+        assert callable(provider.clock)
+        clock_result = provider.clock()
+        assert clock_result is _NOW_UTC
+        assert clock_result.tzinfo is not None
+        assert clock_result.utcoffset() is not None
+
+        assert len(orchestrators) == 1
+        orchestrator = orchestrators[0]
+        assert orchestrator.start_of_day_nav_provider is provider
+        assert orchestrator.broker is wiring.action_kwargs["broker"]
+    finally:
+        wiring.close()
+
+
+def test_wiring_action_kwargs_remain_unchanged_with_daily_loss_enabled(
+    tmp_path,
+):
+    wiring = _build_wiring(
+        tmp_path,
+        start_of_day_nav_db_path=str(tmp_path / "daily-nav.db"),
+    )
+    try:
+        kwargs = wiring.action_kwargs
+        assert isinstance(kwargs, Mapping)
+        assert set(kwargs) == _REQUIRED_ACTION_KWARGS
+        assert not (
+            set(kwargs)
+            & {
+                "start_of_day_nav_provider",
+                "start_of_day_nav_db_path",
+                "daily_loss",
+                "daily_loss_limit",
+            }
+        )
+    finally:
+        wiring.close()
+
+
+def test_wiring_close_closes_daily_nav_provider_exactly_once(
+    monkeypatch,
+    tmp_path,
+):
+    module = importlib.import_module("dashboard.execution_wiring")
+    resources = {
+        "state_managers": [],
+        "drawdown_providers": [],
+        "daily_providers": [],
+    }
+
+    class _FakeBroker:
+        def __init__(self, *, api_key, account_id, base_url):
+            self.account_id = account_id
+
+    class _RecordingStateManager:
+        def __init__(self, *, db_path):
+            self.close_calls = 0
+            resources["state_managers"].append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    class _RecordingDrawdownProvider:
+        def __init__(self, *, db_path, account_id):
+            self.close_calls = 0
+            resources["drawdown_providers"].append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    class _RecordingDailyProvider:
+        def __init__(self, *, db_path, account_id, clock):
+            self.close_calls = 0
+            resources["daily_providers"].append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    class _FakeOrchestrator:
+        def __init__(
+            self,
+            broker,
+            *,
+            start_of_day_nav_provider=None,
+        ):
+            self._broker = broker
+            self._start_of_day_nav_provider = start_of_day_nav_provider
+
+    monkeypatch.setattr(module, "OandaBroker", _FakeBroker)
+    monkeypatch.setattr(
+        module,
+        "PersistentTradeStateManager",
+        _RecordingStateManager,
+    )
+    monkeypatch.setattr(
+        module,
+        "PersistentHighWaterDrawdownProvider",
+        _RecordingDrawdownProvider,
+    )
+    monkeypatch.setattr(
+        module,
+        "PersistentStartOfDayNavProvider",
+        _RecordingDailyProvider,
+        raising=False,
+    )
+    monkeypatch.setattr(module, "TradeOrchestrator", _FakeOrchestrator)
+
+    wiring = _build_wiring(
+        tmp_path,
+        start_of_day_nav_db_path=str(tmp_path / "daily-nav.db"),
+    )
+    wiring.close()
+    wiring.close()
+
+    assert len(resources["daily_providers"]) == 1
+    assert resources["daily_providers"][0].close_calls == 1
+    assert len(resources["state_managers"]) == 1
+    assert resources["state_managers"][0].close_calls == 1
+    assert len(resources["drawdown_providers"]) == 1
+    assert resources["drawdown_providers"][0].close_calls == 1
+
+
+def test_partial_construction_closes_daily_provider_and_preserves_original_failure(
+    monkeypatch,
+    tmp_path,
+):
+    module = importlib.import_module("dashboard.execution_wiring")
+    resources = {
+        "state_managers": [],
+        "drawdown_providers": [],
+        "daily_providers": [],
+    }
+
+    class _FakeBroker:
+        def __init__(self, *, api_key, account_id, base_url):
+            self.account_id = account_id
+
+    class _RecordingStateManager:
+        def __init__(self, *, db_path):
+            self.close_calls = 0
+            resources["state_managers"].append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    class _RecordingDrawdownProvider:
+        def __init__(self, *, db_path, account_id):
+            self.close_calls = 0
+            resources["drawdown_providers"].append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    class _RecordingDailyProvider:
+        def __init__(self, *, db_path, account_id, clock):
+            self.close_calls = 0
+            resources["daily_providers"].append(self)
+
+        def close(self):
+            self.close_calls += 1
+            raise RuntimeError("daily-provider cleanup failed")
+
+    class _FailingOrchestrator:
+        def __init__(
+            self,
+            broker,
+            *,
+            start_of_day_nav_provider=None,
+        ):
+            assert start_of_day_nav_provider is resources[
+                "daily_providers"
+            ][0]
+            raise RuntimeError("orchestrator construction failed")
+
+    monkeypatch.setattr(module, "OandaBroker", _FakeBroker)
+    monkeypatch.setattr(
+        module,
+        "PersistentTradeStateManager",
+        _RecordingStateManager,
+    )
+    monkeypatch.setattr(
+        module,
+        "PersistentHighWaterDrawdownProvider",
+        _RecordingDrawdownProvider,
+    )
+    monkeypatch.setattr(
+        module,
+        "PersistentStartOfDayNavProvider",
+        _RecordingDailyProvider,
+        raising=False,
+    )
+    monkeypatch.setattr(module, "TradeOrchestrator", _FailingOrchestrator)
+
+    with pytest.raises(
+        RuntimeError,
+        match="orchestrator construction failed",
+    ):
+        _build_wiring(
+            tmp_path,
+            start_of_day_nav_db_path=str(tmp_path / "daily-nav.db"),
+        )
+
+    assert len(resources["daily_providers"]) == 1
+    assert resources["daily_providers"][0].close_calls == 1
+    assert len(resources["state_managers"]) == 1
+    assert resources["state_managers"][0].close_calls == 1
+    assert len(resources["drawdown_providers"]) == 1
+    assert resources["drawdown_providers"][0].close_calls == 1

@@ -139,3 +139,92 @@ def test_bridge_applies_moderate_drawdown_budget_before_forwarding(monkeypatch):
     assert broker.calls[0]["position_size"] != 1.0
     assert broker.calls[0]["position_size"] > 0
     assert broker.calls[0]["stop_loss_price"] == sizing.stop_loss_price
+
+
+def test_bridge_forwards_exact_account_snapshot_object_to_orchestrator(
+    monkeypatch,
+):
+    import execution.trade_orchestrator as orchestrator_module
+    from ai.proposal_execution_bridge import ProposalExecutionBridge
+    from brokers.broker_interface import AccountSnapshot
+    from execution.proposal_sizing import size_trade_proposal
+    from execution.trade_orchestrator import TradeOrchestrator
+    from execution.trade_state_manager import TradeStateManager
+
+    account_snapshot = AccountSnapshot(
+        nav=100_000.0,
+        balance=99_750.0,
+        currency="USD",
+        margin_available=94_500.0,
+    )
+    sizing = size_trade_proposal(
+        account_snapshot=account_snapshot,
+        pair="EUR/USD",
+        side="LONG",
+        entry_price=1.1000,
+        stop_distance_pips=50.0,
+        drawdown_fraction=0.0,
+    )
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "is_trading_enabled",
+        lambda: True,
+    )
+
+    broker = _RecordingBroker()
+    state_manager = TradeStateManager()
+    delegate = TradeOrchestrator(broker)
+
+    class _RecordingOrchestrator:
+        def __init__(self):
+            self.calls = []
+
+        def process_trade(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            return delegate.process_trade(**kwargs)
+
+    orchestrator = _RecordingOrchestrator()
+    result = ProposalExecutionBridge.execute_approved_proposal(
+        proposal={
+            "id": 1,
+            "proposal_id": "PROP-SNAPSHOT-IDENTITY",
+            "pair": "EUR/USD",
+            "direction": "LONG",
+            "status": "APPROVED",
+            "suggested_size": 1.0,
+        },
+        orchestrator=orchestrator,
+        state_manager=state_manager,
+        max_currency_exposure=1_000_000.0,
+        account_snapshot=account_snapshot,
+        entry_price=1.1000,
+        stop_distance_pips=50.0,
+        drawdown_fraction=0.0,
+    )
+
+    assert result["success"] is True
+    assert len(orchestrator.calls) == 1
+    proposed_trade = orchestrator.calls[0]["proposed_trade"]
+    assert "account_snapshot" in proposed_trade
+    assert proposed_trade["account_snapshot"] is account_snapshot
+    assert proposed_trade["nav"] == pytest.approx(sizing.nav)
+    assert proposed_trade["account_currency"] == sizing.account_currency
+    assert proposed_trade["risk_fraction"] == pytest.approx(
+        sizing.risk_fraction
+    )
+    assert proposed_trade["risk_budget_amount"] == pytest.approx(
+        sizing.risk_amount
+    )
+    assert proposed_trade["loss_per_unit_at_stop"] == pytest.approx(
+        sizing.loss_per_unit_at_stop
+    )
+    assert proposed_trade["approved_position_size"] == sizing.units
+    assert proposed_trade["approved_position_size"] != 1.0
+
+    recorded_trades = state_manager.get_all_trades()
+    assert len(recorded_trades) == 1
+    assert recorded_trades[0]["risk_at_stop_amount"] == pytest.approx(
+        sizing.units * sizing.loss_per_unit_at_stop
+    )
+    assert len(broker.calls) == 1
