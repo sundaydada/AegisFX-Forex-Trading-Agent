@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from numbers import Real
 from typing import Dict, List
 
-from brokers.broker_interface import BrokerInterface
+from brokers.broker_interface import AccountSnapshot, BrokerInterface
+from execution.daily_loss_gate import evaluate_daily_loss
 from execution.position_netting import net_position
 from execution.portfolio_risk_evaluator import (
     PortfolioRiskEvaluator,
@@ -122,8 +123,14 @@ class TradeOrchestrator:
     This is the ONLY valid trade execution entry point.
     """
 
-    def __init__(self, broker: BrokerInterface):
+    def __init__(
+        self,
+        broker: BrokerInterface,
+        *,
+        start_of_day_nav_provider=None,
+    ):
         self._broker = broker
+        self._start_of_day_nav_provider = start_of_day_nav_provider
         self._trade_timestamps = []
         self._max_trades_per_minute = 100
         self._failure_threshold = 0.5
@@ -385,6 +392,37 @@ class TradeOrchestrator:
             }
             state_manager.record_processed_result(request_id, result)
             return result
+
+        if self._start_of_day_nav_provider is not None:
+            try:
+                account_snapshot = proposed_trade["account_snapshot"]
+                if not isinstance(account_snapshot, AccountSnapshot):
+                    raise ValueError("Invalid AccountSnapshot evidence")
+                baseline = self._start_of_day_nav_provider.get_start_of_day_nav(
+                    account_snapshot
+                )
+                daily_loss_decision = evaluate_daily_loss(
+                    start_of_day_nav=baseline,
+                    current_nav=account_snapshot.nav,
+                    limit_fraction=0.02,
+                )
+            except Exception:
+                result = {
+                    "approval_status": "Rejected",
+                    "reason": "Daily-loss evidence is unavailable or invalid",
+                    "execution_result": None,
+                }
+                state_manager.record_processed_result(request_id, result)
+                return result
+
+            if not daily_loss_decision.new_exposure_allowed:
+                result = {
+                    "approval_status": "Rejected",
+                    "reason": daily_loss_decision.reason,
+                    "execution_result": None,
+                }
+                state_manager.record_processed_result(request_id, result)
+                return result
 
         # Step 3: Record pending trade before broker call
         pending_trade = {
