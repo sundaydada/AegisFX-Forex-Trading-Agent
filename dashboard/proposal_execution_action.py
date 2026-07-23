@@ -19,6 +19,7 @@ from typing import Dict, Optional
 from dashboard.execution_runtime_inputs import (
     execute_approved_proposal_with_runtime_inputs,
 )
+from execution.proposal_sizing import size_trade_proposal
 
 
 def _failure(message: str) -> Dict:
@@ -113,3 +114,107 @@ def execute_reviewed_proposal_action(
         mark_executed(proposal_id)
 
     return result
+
+
+def preview_reviewed_proposal_action(
+    *,
+    proposal,
+    raw_stop_loss_price,
+    broker,
+    quote_provider,
+    drawdown_provider,
+    now_utc,
+    max_quote_age_seconds,
+):
+    """Resolve and size an APPROVED proposal without submitting it.
+
+    Runs the same runtime-input resolver as the execute action, but with
+    a local non-submitting callback that sizes the trade via the
+    existing sizing path and returns the preview evidence as a new plain
+    dict. Never invokes an orchestrator, broker order, approval queue,
+    execution marking, or trade-state persistence, and returns the
+    resolver's structured failure unchanged when any evidence is
+    invalid. The operator's raw stop text is preserved verbatim for
+    later changed-input detection.
+    """
+
+    if not isinstance(proposal, Mapping):
+        return _failure(
+            "Invalid proposal evidence: expected a proposal mapping"
+        )
+
+    proposal_id = proposal.get("proposal_id")
+    if not isinstance(proposal_id, str) or not proposal_id.strip():
+        return _failure(
+            "Invalid proposal evidence: proposal_id must be a"
+            " nonempty string"
+        )
+
+    parsed_stop = _parse_reviewed_stop(raw_stop_loss_price)
+    if parsed_stop is None:
+        return _failure(
+            "Invalid stop evidence: the reviewed stop_loss_price must be"
+            " an explicit finite price greater than zero"
+        )
+
+    # The resolver validates the quote's timestamp but does not forward
+    # it, so the single get_quote call is captured in passing; the
+    # provider object itself is handed to the resolver unchanged.
+    captured_quotes = []
+    original_get_quote = quote_provider.get_quote
+
+    def _capturing_get_quote(pair):
+        quote = original_get_quote(pair)
+        captured_quotes.append(quote)
+        return quote
+
+    def _preview_sizing_callback(
+        *,
+        proposal,
+        orchestrator,
+        state_manager,
+        max_currency_exposure,
+        account_snapshot,
+        entry_price,
+        stop_distance_pips,
+        drawdown_fraction,
+    ):
+        sizing = size_trade_proposal(
+            account_snapshot=account_snapshot,
+            pair=proposal["pair"],
+            side=proposal["direction"],
+            entry_price=entry_price,
+            stop_distance_pips=stop_distance_pips,
+            drawdown_fraction=drawdown_fraction,
+        )
+        return {
+            "proposal_id": proposal_id,
+            "pair": sizing.pair,
+            "direction": sizing.side,
+            "entry_price": sizing.entry_price,
+            "units": sizing.units,
+            "risk_fraction": sizing.risk_fraction,
+            "risk_amount": sizing.risk_amount,
+            "stop_loss_price": parsed_stop,
+            "drawdown_fraction": sizing.drawdown_fraction,
+            "quote_timestamp": captured_quotes[0]["timestamp"],
+            "raw_stop_loss_price": raw_stop_loss_price,
+        }
+
+    quote_provider.get_quote = _capturing_get_quote
+    try:
+        return execute_approved_proposal_with_runtime_inputs(
+            proposal=proposal,
+            orchestrator=None,
+            state_manager=None,
+            max_currency_exposure=None,
+            broker=broker,
+            quote_provider=quote_provider,
+            drawdown_provider=drawdown_provider,
+            stop_loss_price=parsed_stop,
+            now_utc=now_utc,
+            max_quote_age_seconds=max_quote_age_seconds,
+            bridge_execute=_preview_sizing_callback,
+        )
+    finally:
+        del quote_provider.get_quote

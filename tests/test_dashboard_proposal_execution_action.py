@@ -2,7 +2,8 @@ import importlib
 import inspect
 import math
 import sys
-from datetime import datetime, timezone
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -542,3 +543,167 @@ def test_orchestrator_and_state_manager_are_required_keyword_arguments():
         parameter = signature.parameters[name]
         assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
         assert parameter.default is inspect.Parameter.empty
+
+
+class _PreviewBroker:
+    def __init__(self, snapshot):
+        self._snapshot = snapshot
+        self.snapshot_calls = 0
+        self.place_order_calls = []
+
+    def get_account_snapshot(self):
+        self.snapshot_calls += 1
+        return self._snapshot
+
+    def place_order(self, order):
+        self.place_order_calls.append(order)
+        return {"execution_status": "Filled"}
+
+
+class _PreviewQuoteProvider:
+    def __init__(self, quote):
+        self._quote = quote
+        self.calls = []
+
+    def get_quote(self, pair):
+        self.calls.append(pair)
+        return dict(self._quote)
+
+
+class _PreviewDrawdownProvider:
+    def __init__(self, fraction):
+        self._fraction = fraction
+        self.calls = []
+
+    def get_drawdown_fraction(self, account_snapshot):
+        self.calls.append(account_snapshot)
+        return self._fraction
+
+
+def test_preview_reviewed_proposal_action_returns_evidence_without_submission(
+    monkeypatch,
+):
+    import ai.proposal_approval_queue as queue_module
+    import dashboard.proposal_execution_action as action_module
+    import execution.trade_orchestrator as orchestrator_module
+    from brokers.broker_interface import AccountSnapshot
+    from execution.proposal_sizing import size_trade_proposal
+
+    preview_action = action_module.preview_reviewed_proposal_action
+
+    proposal = dict(_PROPOSAL, suggested_size=999999)
+    raw_stop_text = "1.0792"
+    quote_timestamp = _NOW_UTC - timedelta(seconds=5)
+    snapshot = AccountSnapshot(
+        nav=10000.0,
+        balance=10000.0,
+        currency="USD",
+        margin_available=10000.0,
+    )
+    broker = _PreviewBroker(snapshot)
+    quote_provider = _PreviewQuoteProvider({
+        "currency_pair": "EUR/USD",
+        "bid": 1.0840,
+        "ask": 1.0842,
+        "timestamp": quote_timestamp,
+    })
+    drawdown_provider = _PreviewDrawdownProvider(0.0)
+
+    resolver_calls = []
+    original_resolver = (
+        action_module.execute_approved_proposal_with_runtime_inputs
+    )
+
+    def recording_resolver(**kwargs):
+        resolver_calls.append(dict(kwargs))
+        return original_resolver(**kwargs)
+
+    monkeypatch.setattr(
+        action_module,
+        "execute_approved_proposal_with_runtime_inputs",
+        recording_resolver,
+    )
+
+    orchestrator_calls = []
+
+    def recording_process_trade(self, *args, **kwargs):
+        orchestrator_calls.append((args, kwargs))
+
+    monkeypatch.setattr(
+        orchestrator_module.TradeOrchestrator,
+        "process_trade",
+        recording_process_trade,
+    )
+
+    queue_constructions = []
+    original_queue_init = queue_module.ProposalApprovalQueue.__init__
+
+    def recording_queue_init(self, *args, **kwargs):
+        queue_constructions.append(True)
+        original_queue_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        queue_module.ProposalApprovalQueue,
+        "__init__",
+        recording_queue_init,
+    )
+
+    preview = preview_action(
+        proposal=proposal,
+        raw_stop_loss_price=raw_stop_text,
+        broker=broker,
+        quote_provider=quote_provider,
+        drawdown_provider=drawdown_provider,
+        now_utc=_NOW_UTC,
+        max_quote_age_seconds=60.0,
+    )
+
+    assert isinstance(preview, Mapping)
+    evidence = dict(preview)
+
+    entry_price = 1.0842
+    stop_price = 1.0792
+    expected_stop_distance_pips = abs(entry_price - stop_price) / 0.0001
+    expected_sizing = size_trade_proposal(
+        account_snapshot=snapshot,
+        pair="EUR/USD",
+        side="LONG",
+        entry_price=entry_price,
+        stop_distance_pips=expected_stop_distance_pips,
+        drawdown_fraction=0.0,
+    )
+
+    assert evidence["proposal_id"] == "PROP-ACTION-1"
+    assert evidence["pair"] == "EUR/USD"
+    assert evidence["direction"] == "LONG"
+    assert type(evidence["entry_price"]) is float
+    assert evidence["entry_price"] == entry_price
+    assert type(evidence["units"]) is int
+    assert evidence["units"] >= 1
+    assert evidence["units"] == expected_sizing.units
+    assert evidence["units"] != proposal["suggested_size"]
+    assert evidence["risk_fraction"] == expected_sizing.risk_fraction
+    assert evidence["risk_amount"] == expected_sizing.risk_amount
+    assert type(evidence["stop_loss_price"]) is float
+    assert evidence["stop_loss_price"] == stop_price
+    assert evidence["drawdown_fraction"] == 0.0
+    assert evidence["quote_timestamp"] == quote_timestamp
+    assert type(evidence["raw_stop_loss_price"]) is str
+    assert evidence["raw_stop_loss_price"] == raw_stop_text
+
+    assert len(resolver_calls) == 1
+    resolver_call = resolver_calls[0]
+    assert resolver_call["broker"] is broker
+    assert resolver_call["quote_provider"] is quote_provider
+    assert resolver_call["drawdown_provider"] is drawdown_provider
+    assert resolver_call["stop_loss_price"] == stop_price
+    assert resolver_call["now_utc"] is _NOW_UTC
+    assert resolver_call["max_quote_age_seconds"] == 60.0
+
+    assert broker.snapshot_calls == 1
+    assert quote_provider.calls == ["EUR/USD"]
+    assert drawdown_provider.calls == [snapshot]
+
+    assert broker.place_order_calls == []
+    assert orchestrator_calls == []
+    assert queue_constructions == []

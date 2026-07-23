@@ -317,3 +317,114 @@ def test_controller_forwards_explicit_start_of_day_nav_db_path(
 
     assert wiring.close_calls == 1
     assert call_order == ["factory", "action", "close"]
+
+
+_PREVIEW_DEPENDENCY_KEYS = (
+    "broker",
+    "quote_provider",
+    "drawdown_provider",
+    "now_utc",
+    "max_quote_age_seconds",
+)
+
+
+def _call_preview_controller(module, **overrides):
+    controller_kwargs = dict(
+        proposal=dict(_PROPOSAL),
+        raw_stop_loss_price="1.07250",
+        api_key="TEST-API-KEY",
+        account_id="TEST-ACCOUNT",
+        base_url="https://example.invalid",
+        trade_state_db_path="unused-trade-state.db",
+        drawdown_db_path="unused-drawdown.db",
+        start_of_day_nav_db_path="unused-start-of-day-nav.db",
+        approval_db_path="unused-approvals.db",
+        max_currency_exposure=100.0,
+        max_quote_age_seconds=60.0,
+        now_utc=_NOW_UTC,
+    )
+    controller_kwargs.update(overrides)
+    return module.preview_reviewed_proposal_from_dashboard(
+        **controller_kwargs
+    )
+
+
+def test_preview_controller_returns_evidence_and_closes_wiring_without_execution(
+    monkeypatch,
+):
+    call_order = []
+    action_kwargs = _sentinel_action_kwargs()
+    mark_calls = []
+
+    def sentinel_mark_executed(proposal_id):
+        mark_calls.append(proposal_id)
+        return True
+
+    action_kwargs["mark_executed"] = sentinel_mark_executed
+    wiring = _FakeWiring(action_kwargs, call_order=call_order)
+    factory = _RecordingFactory(wiring, call_order=call_order)
+    execute_action = _RecordingAction(call_order=call_order)
+    preview_evidence = {
+        "proposal_id": "PROP-CONTROLLER-1",
+        "units": 12345,
+    }
+    preview_action = _RecordingAction(
+        result=preview_evidence,
+        call_order=call_order,
+    )
+    module = _patched_controller(
+        monkeypatch,
+        factory=factory,
+        action=execute_action,
+    )
+    monkeypatch.setattr(
+        module,
+        "preview_reviewed_proposal_action",
+        preview_action,
+        raising=False,
+    )
+
+    proposal = dict(_PROPOSAL)
+    result = _call_preview_controller(
+        module,
+        proposal=proposal,
+        raw_stop_loss_price="1.07250",
+    )
+
+    assert result is preview_evidence
+
+    assert len(factory.calls) == 1
+    factory_call = factory.calls[0]
+    assert set(factory_call) == _FACTORY_KEYS | {"start_of_day_nav_db_path"}
+    assert factory_call["api_key"] == "TEST-API-KEY"
+    assert factory_call["account_id"] == "TEST-ACCOUNT"
+    assert factory_call["base_url"] == "https://example.invalid"
+    assert factory_call["trade_state_db_path"] == "unused-trade-state.db"
+    assert factory_call["drawdown_db_path"] == "unused-drawdown.db"
+    assert factory_call["start_of_day_nav_db_path"] == (
+        "unused-start-of-day-nav.db"
+    )
+    assert factory_call["approval_db_path"] == "unused-approvals.db"
+    assert factory_call["max_currency_exposure"] == 100.0
+    assert factory_call["max_quote_age_seconds"] == 60.0
+    assert factory_call["now_utc"] is _NOW_UTC
+    assert "proposal" not in factory_call
+    assert "raw_stop_loss_price" not in factory_call
+
+    assert len(preview_action.calls) == 1
+    preview_call = preview_action.calls[0]
+    assert preview_call["proposal"] is proposal
+    assert type(preview_call["raw_stop_loss_price"]) is str
+    assert preview_call["raw_stop_loss_price"] == "1.07250"
+    for key in _PREVIEW_DEPENDENCY_KEYS:
+        assert preview_call[key] is action_kwargs[key]
+    assert set(preview_call) == {
+        "proposal",
+        "raw_stop_loss_price",
+        *_PREVIEW_DEPENDENCY_KEYS,
+    }
+
+    assert execute_action.calls == []
+    assert mark_calls == []
+    assert wiring.close_calls == 1
+    assert call_order == ["factory", "action", "close"]
