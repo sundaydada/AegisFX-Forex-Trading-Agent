@@ -345,3 +345,110 @@ def test_production_view_formats_all_confidence_values_as_percentages():
     assert "Confidence 88%" in pending_fragment
     assert "Confidence 91%" in approved_fragment
     assert "Confidence 79%" in recent_fragment
+
+
+PREVIEW_EVIDENCE = {
+    "proposal_id": "PROP-APPROVED-001",
+    "pair": "GBP/USD",
+    "direction": "SHORT",
+    "entry_price": 1.27456,
+    "units": 3417,
+    "risk_fraction": 0.005,
+    "risk_amount": 61.83,
+    "stop_loss_price": 1.28912,
+    "drawdown_fraction": 0.0214,
+    "quote_timestamp": "2026-07-22T15:59:57+00:00",
+    "raw_stop_loss_price": "1.28912",
+}
+
+
+def test_approved_proposal_uses_review_then_confirm_practice_order():
+    from dashboard.production_view import render_approved_proposal_row
+
+    action_calls = []
+
+    def on_review(proposal):
+        action_calls.append(("review", proposal))
+
+    def on_confirm(proposal):
+        action_calls.append(("confirm", proposal))
+
+    # Without preview evidence: Review Trade only, no one-click path.
+    spy = _StreamlitSpy()
+    render_approved_proposal_row(
+        spy,
+        APPROVED,
+        on_review=on_review,
+        on_confirm=on_confirm,
+        preview=None,
+    )
+
+    labels = [args[0] for _, _, args, _ in _calls(spy, "button")]
+    keys = [kwargs["key"] for _, _, _, kwargs in _calls(spy, "button")]
+    assert "Execute Trade" not in labels
+    assert labels.count("Review Trade") == 1
+    assert "review_PROP-APPROVED-001" in keys
+    assert "Confirm Practice Order" not in labels
+    assert action_calls == []
+
+    # Pressing Review Trade dispatches the review callback once.
+    spy = _StreamlitSpy({"review_PROP-APPROVED-001"})
+    render_approved_proposal_row(
+        spy,
+        APPROVED,
+        on_review=on_review,
+        on_confirm=on_confirm,
+        preview=None,
+    )
+    assert action_calls == [("review", APPROVED)]
+    assert action_calls[0][1] is APPROVED
+    action_calls.clear()
+
+    # With preview evidence: the final execution values are visible and
+    # Confirm Practice Order appears; rendering alone dispatches nothing.
+    spy = _StreamlitSpy()
+    render_approved_proposal_row(
+        spy,
+        APPROVED,
+        on_review=on_review,
+        on_confirm=on_confirm,
+        preview=PREVIEW_EVIDENCE,
+    )
+
+    labels = [args[0] for _, _, args, _ in _calls(spy, "button")]
+    keys = [kwargs["key"] for _, _, _, kwargs in _calls(spy, "button")]
+    assert "Execute Trade" not in labels
+    assert labels.count("Confirm Practice Order") == 1
+    assert "confirm_PROP-APPROVED-001" in keys
+
+    rendered_text = unescape(
+        " ".join(
+            str(args[0])
+            for name, _, args, _ in spy.calls
+            if name in {"markdown", "caption"}
+        )
+    )
+    for evidence_value in (
+        "1.27456",
+        "3417",
+        "0.005",
+        "61.83",
+        "1.28912",
+        "0.0214",
+        "15:59:57",
+        "size 2.0",
+    ):
+        assert evidence_value in rendered_text
+    assert action_calls == []
+
+    # Pressing Confirm Practice Order dispatches the confirm callback once.
+    spy = _StreamlitSpy({"confirm_PROP-APPROVED-001"})
+    render_approved_proposal_row(
+        spy,
+        APPROVED,
+        on_review=on_review,
+        on_confirm=on_confirm,
+        preview=PREVIEW_EVIDENCE,
+    )
+    assert action_calls == [("confirm", APPROVED)]
+    assert action_calls[0][1] is APPROVED
