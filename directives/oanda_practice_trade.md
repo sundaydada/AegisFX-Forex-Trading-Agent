@@ -9,10 +9,19 @@ This runbook permits one operator-reviewed trade in an OANDA practice/demo accou
 - Work from a clean, synchronized main branch.
 - Configure practice-account credentials through the repository's existing approved mechanism.
 - Never paste credentials into chat, source, logs, screenshots, or this runbook.
-- Confirm the dashboard uses the OANDA practice base URL.
 - Confirm the persistent trade-state, drawdown, approval, and start-of-day NAV database paths are writable.
 - Confirm no unresolved pending trade exists.
-- Require successful resolution of the account snapshot, current quote, protective stop, drawdown, portfolio risk, same-currency risk, and daily-loss evidence.
+
+## Pre-submit baseline
+
+Confirm all of the following before any review or submission, without recording secrets, account IDs, tokens, or balances:
+
+- The configured broker URL is the OANDA practice URL.
+- The OANDA portal visibly shows a DEMO/practice account.
+- OANDA shows zero open trades and zero open orders.
+- The AegisFX dashboard shows zero current positions and zero exposure.
+- Exactly one approved proposal is selected for the supervised attempt.
+- No other proposal is approved, reviewed, confirmed, or submitted during the attempt.
 
 ## First-trade constraints
 
@@ -26,25 +35,64 @@ This runbook permits one operator-reviewed trade in an OANDA practice/demo accou
 
 ## Procedure
 
-1. Confirm practice-account mode and the intended account identity without recording secrets.
+1. Confirm the pre-submit baseline above.
 2. From the repository root, launch the reviewed dashboard with:
 
        python -m streamlit run dashboard/app.py
-3. Inspect the single proposal's ID, instrument, direction, calculated integer units, monetary risk amount, current entry quote, and operator-entered absolute protective stop.
-4. Approve only when every field and the resulting risk are understood and acceptable.
-5. Submit exactly once and remain present while the result resolves.
-6. Do not retry automatically after an error, timeout, or uncertain response.
 
-## Required success evidence
+3. Enter an explicit absolute protective-stop price for the selected approved proposal. The stop:
+   - must be finite and greater than zero;
+   - must not be blank;
+   - is never invented, inferred, defaulted, or substituted by the system;
+   - should be directionally valid: below the entry for a LONG proposal and above the entry for a SHORT proposal.
+4. Click `Review Trade`. This action must not submit an order. Inspect every displayed evidence value:
+   - proposal ID, pair, and direction;
+   - entry price;
+   - integer units;
+   - risk fraction and monetary risk amount;
+   - protective stop;
+   - drawdown fraction;
+   - quote timestamp;
+   - raw protective-stop input.
 
-Record the following sanitized evidence without secrets:
+   The advisory proposal size and the final calculated integer units are different concepts; only the calculated integer units are submitted.
+5. Review again whenever:
+   - the protective-stop input changes;
+   - the quote, units, risk, drawdown, timestamp, or any other displayed evidence changes;
+   - the dashboard reports that evidence changed or says to review again;
+   - preview or quote resolution fails.
 
-- UTC timestamp and safely masked practice account identifier.
-- Proposal ID, instrument, and direction.
-- Integer units, entry price, stop price, and calculated monetary risk.
-- OANDA practice transaction or order ID and final dashboard result.
-- Confirmation that the proposal became `EXECUTED`.
-- Confirmation that persistent trade-state, drawdown baseline, and start-of-day NAV baseline exist.
+   Never bypass, weaken, or repeatedly race this check.
+6. Click `Confirm Practice Order` exactly once, and only after the displayed evidence has been reviewed and remains unchanged. Stop immediately after clicking and wait for one clear success or failure result. Do not:
+   - double-click;
+   - confirm another proposal;
+   - retry after an ambiguous result;
+   - place a parallel manual order;
+   - use any obsolete Execute Trade procedure.
+
+## Verification evidence
+
+On success, record without secrets:
+
+- proposal ID;
+- dashboard execution result;
+- broker order or trade ID;
+- pair, direction, and units;
+- protective stop;
+- number of open OANDA positions;
+- UTC timestamp.
+
+Verify in the OANDA DEMO portal that exactly one expected practice position exists. On any mismatch, duplicate, unclear result, or missing broker ID, stop without another submission.
+
+## Closure
+
+After verification, close the single practice position through the OANDA DEMO portal. Then confirm:
+
+- OANDA shows zero open trades;
+- OANDA shows zero open orders;
+- the dashboard has been refreshed;
+- any remaining local position is treated as a reconciliation issue and is not closed by submitting another broker action;
+- final evidence of zero broker exposure is recorded.
 
 ## Stop conditions
 
@@ -58,10 +106,6 @@ No order may proceed or be retried when:
 - The broker response is missing, ambiguous, rejected, or timed out.
 - The operator cannot explain the proposed risk.
 
-## After the order
+## Failure rule
 
-- Verify the order directly in the OANDA practice interface.
-- Compare the broker details with the dashboard result and persistent trade state.
-- Stop after this single validation order.
-- Capture sanitized evidence and document any discrepancy.
-- Do not place a second order during this validation session.
+One attempt, one order maximum, and stop on any unexpected result.

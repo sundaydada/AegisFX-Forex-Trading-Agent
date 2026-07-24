@@ -268,6 +268,32 @@ def test_measured_zero_drawdown_is_forwarded_without_defaulting():
     assert upper_boundary["bridge"].calls[0]["drawdown_fraction"] == 1.0
 
 
+def test_quote_timestamp_at_bounded_future_skew_is_accepted():
+    quote = _quote(timestamp=_NOW_UTC + timedelta(seconds=5))
+
+    result, harness = _execute(quote=quote)
+
+    assert "future" not in str(
+        result.get("message", "")
+    ).lower(), (
+        "a quote timestamp at the bounded future-skew boundary must not"
+        " be rejected as future evidence"
+    )
+    assert result is harness["bridge"].result
+    assert result["success"] is True
+    assert harness["broker"].calls == 1
+    assert harness["quote_provider"].calls == ["EUR/USD"]
+    assert harness["drawdown_provider"].calls == [harness["snapshot"]]
+    assert len(harness["bridge"].calls) == 1
+
+    call = harness["bridge"].calls[0]
+    assert call["proposal"] is harness["proposal"]
+    assert call["account_snapshot"] is harness["snapshot"]
+    assert call["entry_price"] == 1.1000
+    assert call["stop_distance_pips"] == pytest.approx(50.0)
+    assert call["drawdown_fraction"] == 0.02
+
+
 def test_invalid_quote_evidence_fails_closed_before_drawdown_or_dispatch():
     result, harness = _execute(quote_error=RuntimeError("quote unavailable"))
     _assert_failure(result, harness, "quote")
@@ -290,7 +316,9 @@ def test_invalid_quote_evidence_fails_closed_before_drawdown_or_dispatch():
             ("timestamp", "stale"),
         ),
         (
-            _quote(timestamp=_NOW_UTC + timedelta(microseconds=1)),
+            _quote(
+                timestamp=_NOW_UTC + timedelta(seconds=5, microseconds=1)
+            ),
             ("timestamp", "future"),
         ),
         (_quote(timestamp=_NOW_UTC.replace(tzinfo=None)), ("timestamp",)),

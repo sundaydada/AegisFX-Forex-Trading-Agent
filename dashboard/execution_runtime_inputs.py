@@ -18,6 +18,9 @@ from brokers.broker_interface import AccountSnapshot
 _VALID_DIRECTIONS = ("LONG", "SHORT")
 _JPY_PIP_SIZE = 0.01
 _DEFAULT_PIP_SIZE = 0.0001
+# now_utc is captured before the snapshot and quote round trips, so a
+# fresh tick can legitimately carry a slightly later timestamp.
+_MAX_FUTURE_SKEW_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -169,7 +172,8 @@ def execute_approved_proposal_with_runtime_inputs(
             "Invalid quote evidence: timestamp must be a timezone-aware"
             " datetime"
         )
-    if timestamp > now_utc:
+    future_skew_seconds = (timestamp - now_utc).total_seconds()
+    if future_skew_seconds > _MAX_FUTURE_SKEW_SECONDS:
         return _failure(
             "Invalid quote evidence: timestamp is in the future of now_utc"
         )
