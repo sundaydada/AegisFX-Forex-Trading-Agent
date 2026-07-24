@@ -144,8 +144,11 @@ def test_production_view_passively_renders_shared_markup_and_controls():
     def on_reject(proposal_id):
         action_calls.append(("reject", proposal_id))
 
-    def on_execute(proposal):
-        action_calls.append(("execute", proposal))
+    def on_review(proposal):
+        action_calls.append(("review", proposal))
+
+    def on_confirm(proposal):
+        action_calls.append(("confirm", proposal))
 
     spy = _StreamlitSpy()
     render_production_hero(
@@ -164,7 +167,9 @@ def test_production_view_passively_renders_shared_markup_and_controls():
     render_approved_proposal_row(
         spy,
         APPROVED,
-        on_execute=on_execute,
+        on_review=on_review,
+        on_confirm=on_confirm,
+        preview=None,
     )
     render_recent_decision_row(spy, RECENT, tone="primary")
     render_system_status_tiles(spy, STATUSES)
@@ -235,15 +240,16 @@ def test_production_view_passively_renders_shared_markup_and_controls():
     assert [(args[0], kwargs["key"]) for _, _, args, kwargs in button_calls] == [
         ("Approve", "approve_PROP-PENDING-001"),
         ("Reject", "reject_PROP-PENDING-001"),
-        ("Execute Trade", "execute_PROP-APPROVED-001"),
+        ("Review Trade", "review_PROP-APPROVED-001"),
     ]
+    assert all(args[0] != "Execute Trade" for _, _, args, _ in button_calls)
     button_columns = {
         kwargs["key"]: column for _, column, _, kwargs in button_calls
     }
     assert button_columns == {
         "approve_PROP-PENDING-001": 1,
         "reject_PROP-PENDING-001": 2,
-        "execute_PROP-APPROVED-001": 1,
+        "review_PROP-APPROVED-001": 1,
     }
     for _, _, _, kwargs in button_calls:
         assert not any(key.startswith("on_") or key == "callback" for key in kwargs)
@@ -288,21 +294,6 @@ def test_production_view_dispatches_only_reject_when_pressed():
     assert action_calls == [("reject", "PROP-PENDING-001")]
 
 
-def test_production_view_dispatches_execute_once_when_pressed():
-    from dashboard.production_view import render_approved_proposal_row
-
-    action_calls = []
-    spy = _StreamlitSpy({"execute_PROP-APPROVED-001"})
-    render_approved_proposal_row(
-        spy,
-        APPROVED,
-        on_execute=lambda proposal: action_calls.append(("execute", proposal)),
-    )
-
-    assert action_calls == [("execute", APPROVED)]
-    assert action_calls[0][1] is APPROVED
-
-
 def test_production_view_formats_all_confidence_values_as_percentages():
     from dashboard.production_view import (
         render_approved_proposal_row,
@@ -321,7 +312,9 @@ def test_production_view_formats_all_confidence_values_as_percentages():
     render_approved_proposal_row(
         spy,
         APPROVED,
-        on_execute=lambda proposal: None,
+        on_review=lambda proposal: None,
+        on_confirm=lambda proposal: None,
+        preview=None,
     )
     render_recent_decision_row(
         spy,

@@ -28,6 +28,7 @@ from ai.recommendation_accuracy import RecommendationAccuracyAnalytics
 from execution.autonomy_gate import DEFAULT_PROPOSAL_MAX_AGE_HOURS
 from dashboard.reviewed_execution_controller import (
     execute_reviewed_proposal_from_dashboard,
+    preview_reviewed_proposal_from_dashboard,
 )
 from market_data.alpha_vantage_price_feed import get_fx_price, get_fx_intraday
 from market_data.market_context import build_market_context
@@ -604,7 +605,126 @@ else:
 if approved_proposals:
     st.caption(f"{len(approved_proposals)} approved proposal(s) — awaiting execution")
 
-    def _execute_approved_proposal(proposal, raw_stop_loss_price) -> None:
+    def _review_approved_proposal(proposal, raw_stop_loss_price) -> None:
+        proposal_id = str(proposal["proposal_id"])
+        preview_key = f"reviewed_preview_{proposal_id}"
+
+        try:
+            result = preview_reviewed_proposal_from_dashboard(
+                proposal=proposal,
+                raw_stop_loss_price=raw_stop_loss_price,
+                api_key=OANDA_API_KEY,
+                account_id=OANDA_ACCOUNT_ID,
+                base_url=OANDA_BASE_URL,
+                trade_state_db_path=DB_PATH,
+                drawdown_db_path=DRAWDOWN_DB_PATH,
+                start_of_day_nav_db_path=START_OF_DAY_NAV_DB_PATH,
+                approval_db_path="proposal_approvals.db",
+                max_currency_exposure=MAX_ALLOWED_EXPOSURE,
+                max_quote_age_seconds=MAX_QUOTE_AGE_SECONDS,
+                now_utc=datetime.now(timezone.utc),
+            )
+        except Exception as e:
+            st.session_state.pop(preview_key, None)
+            st.error(f"Review error: {str(e)}")
+            return
+
+        if not isinstance(result, dict) or result.get("success") is False:
+            failure_message = ""
+            if isinstance(result, dict):
+                failure_message = str(result.get("message", ""))
+            st.session_state.pop(preview_key, None)
+            st.error(f"Review failed: {failure_message}")
+            return
+
+        st.session_state[preview_key] = result
+        st.rerun()
+
+    def _confirm_approved_proposal(proposal, raw_stop_loss_price) -> None:
+        proposal_id = str(proposal["proposal_id"])
+        preview_key = f"reviewed_preview_{proposal_id}"
+        stored_preview = st.session_state.get(preview_key)
+
+        if not isinstance(stored_preview, dict):
+            st.error(
+                "No reviewed preview exists for this proposal —"
+                " press Review Trade first."
+            )
+            return
+
+        evidence_fields = (
+            "proposal_id",
+            "pair",
+            "direction",
+            "entry_price",
+            "units",
+            "risk_fraction",
+            "risk_amount",
+            "stop_loss_price",
+            "drawdown_fraction",
+            "quote_timestamp",
+            "raw_stop_loss_price",
+        )
+
+        if raw_stop_loss_price != stored_preview.get("raw_stop_loss_price"):
+            st.session_state.pop(preview_key, None)
+            st.error(
+                "The protective stop input changed after review —"
+                " review again before confirming."
+            )
+            return
+
+        try:
+            fresh_preview = preview_reviewed_proposal_from_dashboard(
+                proposal=proposal,
+                raw_stop_loss_price=raw_stop_loss_price,
+                api_key=OANDA_API_KEY,
+                account_id=OANDA_ACCOUNT_ID,
+                base_url=OANDA_BASE_URL,
+                trade_state_db_path=DB_PATH,
+                drawdown_db_path=DRAWDOWN_DB_PATH,
+                start_of_day_nav_db_path=START_OF_DAY_NAV_DB_PATH,
+                approval_db_path="proposal_approvals.db",
+                max_currency_exposure=MAX_ALLOWED_EXPOSURE,
+                max_quote_age_seconds=MAX_QUOTE_AGE_SECONDS,
+                now_utc=datetime.now(timezone.utc),
+            )
+        except Exception as e:
+            st.session_state.pop(preview_key, None)
+            st.error(
+                f"Fresh review error: {str(e)} — review again"
+                " before confirming."
+            )
+            return
+
+        if (
+            not isinstance(fresh_preview, dict)
+            or fresh_preview.get("success") is False
+        ):
+            failure_message = ""
+            if isinstance(fresh_preview, dict):
+                failure_message = str(fresh_preview.get("message", ""))
+            st.session_state.pop(preview_key, None)
+            st.error(
+                f"Fresh review failed: {failure_message} — review again"
+                " before confirming."
+            )
+            return
+
+        changed_fields = [
+            field
+            for field in evidence_fields
+            if stored_preview.get(field) != fresh_preview.get(field)
+        ]
+        if changed_fields:
+            st.session_state.pop(preview_key, None)
+            st.error(
+                "Execution evidence changed since review ("
+                + ", ".join(changed_fields)
+                + ") — review again before confirming."
+            )
+            return
+
         try:
             result = execute_reviewed_proposal_from_dashboard(
                 proposal=proposal,
@@ -624,6 +744,7 @@ if approved_proposals:
             st.error(f"Execution error: {str(e)}")
         else:
             if isinstance(result, dict) and result.get("success") is True:
+                st.session_state.pop(preview_key, None)
                 st.success(f"Executed: {result.get('message', '')}")
             else:
                 failure_message = ""
@@ -641,14 +762,23 @@ if approved_proposals:
                 key=f"stop_loss_price_{p['proposal_id']}",
                 help="Enter the absolute price. Example: 1.07250",
             )
+            proposal_id = str(p["proposal_id"])
+            preview_key = f"reviewed_preview_{proposal_id}"
+            reviewed_preview = st.session_state.get(preview_key)
             render_approved_proposal_row(
                 st,
                 p,
-                on_execute=(
+                on_review=(
                     lambda selected_proposal, raw_stop=raw_stop_loss_price: (
-                        _execute_approved_proposal(selected_proposal, raw_stop)
+                        _review_approved_proposal(selected_proposal, raw_stop)
                     )
                 ),
+                on_confirm=(
+                    lambda selected_proposal, raw_stop=raw_stop_loss_price: (
+                        _confirm_approved_proposal(selected_proposal, raw_stop)
+                    )
+                ),
+                preview=reviewed_preview,
             )
 
 if recent_decisions:

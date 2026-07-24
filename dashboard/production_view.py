@@ -67,9 +67,8 @@ def render_approved_proposal_row(
     st_module,
     proposal: Mapping[str, object],
     *,
-    on_execute: Callable[[Mapping[str, object]], None] | None = None,
-    on_review: Callable[[Mapping[str, object]], None] | None = None,
-    on_confirm: Callable[[Mapping[str, object]], None] | None = None,
+    on_review: Callable[[Mapping[str, object]], None],
+    on_confirm: Callable[[Mapping[str, object]], None],
     preview: Mapping[str, object] | None = None,
 ) -> None:
     content_column, action_column = st_module.columns([3, 1])
@@ -90,51 +89,33 @@ def render_approved_proposal_row(
 
     proposal_id = str(proposal["proposal_id"])
 
-    if on_review is not None or on_confirm is not None:
-        if on_review is None or on_confirm is None:
-            raise ValueError(
-                "Reviewed mode requires both on_review and on_confirm."
-            )
-
-        if preview is None:
-            if action_column.button(
-                "Review Trade",
-                key=f"review_{proposal_id}",
-            ):
-                on_review(proposal)
-            return
-
-        content_column.caption(
-            f"Entry {preview['entry_price']} · Units {preview['units']}"
-        )
-        content_column.caption(
-            f"Risk fraction {preview['risk_fraction']}"
-            f" · Risk amount {preview['risk_amount']}"
-        )
-        content_column.caption(
-            f"Protective stop {preview['stop_loss_price']}"
-            f" · Drawdown {preview['drawdown_fraction']}"
-        )
-        content_column.caption(
-            f"Quote {str(preview['quote_timestamp'])[:19]}"
-        )
+    if preview is None:
         if action_column.button(
-            "Confirm Practice Order",
-            key=f"confirm_{proposal_id}",
+            "Review Trade",
+            key=f"review_{proposal_id}",
         ):
-            on_confirm(proposal)
+            on_review(proposal)
         return
 
-    # Temporary legacy mode: removed once app.py adopts review-then-confirm.
-    if on_execute is None:
-        raise ValueError(
-            "Legacy mode requires on_execute."
-        )
+    content_column.caption(
+        f"Entry {preview['entry_price']} · Units {preview['units']}"
+    )
+    content_column.caption(
+        f"Risk fraction {preview['risk_fraction']}"
+        f" · Risk amount {preview['risk_amount']}"
+    )
+    content_column.caption(
+        f"Protective stop {preview['stop_loss_price']}"
+        f" · Drawdown {preview['drawdown_fraction']}"
+    )
+    content_column.caption(
+        f"Quote {str(preview['quote_timestamp'])[:19]}"
+    )
     if action_column.button(
-        "Execute Trade",
-        key=f"execute_{proposal_id}",
+        "Confirm Practice Order",
+        key=f"confirm_{proposal_id}",
     ):
-        on_execute(proposal)
+        on_confirm(proposal)
 
 
 def render_recent_decision_row(
