@@ -821,3 +821,107 @@ def test_app_blocks_confirmation_when_review_evidence_changes():
             "the execution controller must remain the sole submission"
             " path for the reviewed actions"
         )
+
+
+_PENDING_LIMIT_NAME = "PENDING_DISPLAY_LIMIT"
+
+
+def _pending_render_loop(tree):
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.For):
+            continue
+        for call in _calls_in(node):
+            if _call_name(call) == "render_pending_proposal_row":
+                return node
+    return None
+
+
+def test_pending_queue_renders_bounded_newest_window():
+    tree = _app_tree()
+
+    limit_assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == _PENDING_LIMIT_NAME
+    ]
+    assert len(limit_assignments) == 1, (
+        "dashboard/app.py must define exactly one module-level"
+        f" {_PENDING_LIMIT_NAME} constant"
+    )
+    limit_value = limit_assignments[0].value
+    assert isinstance(limit_value, ast.Constant), (
+        f"{_PENDING_LIMIT_NAME} must be a literal constant"
+    )
+    assert limit_value.value == 50, (
+        f"{_PENDING_LIMIT_NAME} must be 50 for the simple MVP"
+    )
+
+    loop = _pending_render_loop(tree)
+    assert loop is not None, "pending-proposal render loop not found"
+
+    iterated = loop.iter
+    assert isinstance(iterated, ast.Subscript), (
+        "the pending loop must iterate a bounded newest window, not the"
+        " unbounded pending_proposals list"
+    )
+    assert isinstance(iterated.value, ast.Name)
+    assert iterated.value.id == "pending_proposals", (
+        "the bounded window must be taken from pending_proposals"
+    )
+
+    window = iterated.slice
+    assert isinstance(window, ast.Slice), (
+        "the pending window must be a slice of the newest pending rows"
+    )
+    assert window.upper is None, (
+        "the newest-window slice must run to the end of the list"
+    )
+    assert window.step is None, (
+        "the newest-window slice must not skip pending rows"
+    )
+
+    lower = window.lower
+    assert isinstance(lower, ast.UnaryOp) and isinstance(
+        lower.op,
+        ast.USub,
+    ), (
+        "the pending window must start at a negative offset so the"
+        " newest rows are the ones displayed"
+    )
+    assert isinstance(lower.operand, ast.Name)
+    assert lower.operand.id == _PENDING_LIMIT_NAME, (
+        "the pending window size must come from"
+        f" {_PENDING_LIMIT_NAME}"
+    )
+
+    total_captions = [
+        call
+        for call in _calls_in(tree)
+        if _call_name(call) == "caption"
+        and any(
+            _call_name(inner) == "len"
+            and inner.args
+            and isinstance(inner.args[0], ast.Name)
+            and inner.args[0].id == "pending_proposals"
+            for inner in _calls_in(call)
+        )
+    ]
+    assert total_captions, (
+        "the pending caption must keep reporting the unbounded total"
+        " with len(pending_proposals)"
+    )
+
+    caption_text = " ".join(
+        constant.value
+        for call in total_captions
+        for constant in ast.walk(call)
+        if isinstance(constant, ast.Constant)
+        and isinstance(constant.value, str)
+    ).lower()
+    assert "showing newest" in caption_text, (
+        "the pending caption must state that only the newest bounded"
+        " subset is displayed"
+    )
