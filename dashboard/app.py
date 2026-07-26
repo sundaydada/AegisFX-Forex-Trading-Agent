@@ -44,6 +44,9 @@ from dashboard.theme import apply_dashboard_theme
 
 MAX_ALLOWED_EXPOSURE = 100.0
 MAX_QUOTE_AGE_SECONDS = 60.0
+# Display bound only — the full pending history stays in the database
+# and in pending_proposals for totals and analytics.
+PENDING_DISPLAY_LIMIT = 50
 
 
 @st.cache_data(ttl=30)
@@ -576,7 +579,11 @@ except Exception as e:
     recent_decisions = []
 
 if pending_proposals:
-    st.caption(f"{len(pending_proposals)} pending proposal(s) — awaiting decision")
+    st.caption(
+        f"{len(pending_proposals)} pending proposal(s) — awaiting decision"
+        " · showing newest "
+        f"{min(len(pending_proposals), PENDING_DISPLAY_LIMIT)}"
+    )
 
     def _approve_pending_proposal(proposal_id: str) -> None:
         aq = ProposalApprovalQueue(db_path="proposal_approvals.db")
@@ -590,7 +597,7 @@ if pending_proposals:
         aq.close()
         st.rerun()
 
-    for p in pending_proposals:
+    for p in pending_proposals[-PENDING_DISPLAY_LIMIT:]:
         with st.container():
             render_pending_proposal_row(
                 st,
