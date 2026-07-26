@@ -744,9 +744,9 @@ def test_app_blocks_confirmation_when_review_evidence_changes():
     )
 
     confirm_constants = _string_constants(confirm)
-    assert compared_fields <= confirm_constants, (
-        "confirmation must compare every execution-critical field"
-        " exposed by the committed preview evidence"
+    assert _DECISION_EVIDENCE_FIELDS <= confirm_constants, (
+        "confirmation must exact-match every operator-controlled"
+        " decision field exposed by the committed preview evidence"
     )
 
     replacement_or_clear = [
@@ -925,3 +925,270 @@ def test_pending_queue_renders_bounded_newest_window():
         "the pending caption must state that only the newest bounded"
         " subset is displayed"
     )
+
+
+_ENTRY_DRIFT_CONSTANT = "MAX_ENTRY_DRIFT_PIPS"
+_REVIEW_AGE_CONSTANT = "REVIEW_MAX_AGE_SECONDS"
+
+# Operator-controlled evidence: the decision the operator actually made.
+# These must survive confirmation unchanged, matched exactly.
+_DECISION_EVIDENCE_FIELDS = {
+    "proposal_id",
+    "pair",
+    "direction",
+    "risk_fraction",
+    "stop_loss_price",
+    "raw_stop_loss_price",
+    "drawdown_fraction",
+}
+
+# Market-derived evidence: re-resolved and re-sized at confirmation time,
+# so exact equality on these can never hold in a live market.
+_MARKET_DERIVED_FIELDS = {
+    "entry_price",
+    "units",
+    "risk_amount",
+    "quote_timestamp",
+}
+
+
+def _module_constant(tree, name):
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+    ]
+    assert len(assignments) == 1, (
+        f"dashboard/app.py must define exactly one module-level {name}"
+        " constant"
+    )
+    value = assignments[0].value
+    assert isinstance(value, ast.Constant), (
+        f"{name} must be a numeric literal"
+    )
+    return value.value
+
+
+def _string_collections(scope):
+    collections = []
+    for node in ast.walk(scope):
+        if not isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            continue
+        if not node.elts:
+            continue
+        if all(
+            isinstance(element, ast.Constant)
+            and isinstance(element.value, str)
+            for element in node.elts
+        ):
+            collections.append((node, {e.value for e in node.elts}))
+    return collections
+
+
+def _scope_string_constants(scope):
+    return {
+        node.value
+        for node in ast.walk(scope)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+
+def _compares_referencing_name(scope, name):
+    return [
+        node
+        for node in ast.walk(scope)
+        if isinstance(node, ast.Compare)
+        and any(
+            isinstance(inner, ast.Name) and inner.id == name
+            for inner in ast.walk(node)
+        )
+    ]
+
+
+def test_confirmation_pins_decision_evidence_and_tolerates_quote_drift():
+    tree = _app_tree()
+
+    drift_limit = _module_constant(tree, _ENTRY_DRIFT_CONSTANT)
+    assert drift_limit == 2.0, (
+        f"{_ENTRY_DRIFT_CONSTANT} must bound entry drift at 2.0 pips"
+    )
+    review_age_limit = _module_constant(tree, _REVIEW_AGE_CONSTANT)
+    assert review_age_limit == 120.0, (
+        f"{_REVIEW_AGE_CONSTANT} must bound review age at 120.0 seconds"
+    )
+
+    confirm = _function_def(tree, "_confirm_approved_proposal")
+    assert confirm is not None, (
+        "dashboard/app.py must define _confirm_approved_proposal"
+    )
+
+    # --- Operator-controlled evidence stays exact-matched ---
+    decision_collections = [
+        (node, fields)
+        for node, fields in _string_collections(confirm)
+        if fields == _DECISION_EVIDENCE_FIELDS
+    ]
+    assert len(decision_collections) == 1, (
+        "confirmation must define exactly one exact-match collection"
+        f" containing precisely {sorted(_DECISION_EVIDENCE_FIELDS)}"
+    )
+    decision_node, decision_fields = decision_collections[0]
+    assert not (decision_fields & _MARKET_DERIVED_FIELDS), (
+        "market-derived evidence must not be exact-matched"
+    )
+
+    # --- Market-derived evidence is never exact-compared ---
+    for node in ast.walk(confirm):
+        if not isinstance(node, ast.Compare):
+            continue
+        if not any(
+            isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops
+        ):
+            continue
+        compared_strings = _scope_string_constants(node)
+        assert not (compared_strings & _MARKET_DERIVED_FIELDS), (
+            "confirmation must not compare market-derived evidence with"
+            " == or != — it is re-resolved at confirmation time"
+        )
+
+    # --- Bounded entry drift, computed from reviewed and fresh entry ---
+    drift_compares = _compares_referencing_name(
+        confirm,
+        _ENTRY_DRIFT_CONSTANT,
+    )
+    assert drift_compares, (
+        "confirmation must compare entry-price drift against"
+        f" {_ENTRY_DRIFT_CONSTANT}"
+    )
+    entry_price_reads = [
+        node
+        for node in ast.walk(confirm)
+        if isinstance(node, ast.Constant)
+        and node.value == "entry_price"
+    ]
+    assert len(entry_price_reads) >= 2, (
+        "drift must be computed from both the reviewed and the fresh"
+        " entry_price"
+    )
+
+    # --- Reviewed quote age is revalidated, not equality-checked ---
+    age_compares = _compares_referencing_name(
+        confirm,
+        _REVIEW_AGE_CONSTANT,
+    )
+    assert age_compares, (
+        "confirmation must compare the stored review's age against"
+        f" {_REVIEW_AGE_CONSTANT}"
+    )
+    confirm_constants = _scope_string_constants(confirm)
+    assert "quote_timestamp" in confirm_constants, (
+        "review age must be derived from the reviewed quote_timestamp"
+    )
+
+    # --- Exact raw stop-input protection is preserved ---
+    raw_stop_compares = [
+        node
+        for node in ast.walk(confirm)
+        if isinstance(node, ast.Compare)
+        and any(
+            isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops
+        )
+        and "raw_stop_loss_price" in _scope_string_constants(node)
+    ]
+    assert raw_stop_compares, (
+        "the operator's raw stop input must still be matched exactly"
+    )
+
+    # --- One preview, one execution, execution last ---
+    preview_calls = [
+        call
+        for call in _calls_in(confirm)
+        if _call_name(call) == _PREVIEW_FUNCTION
+    ]
+    assert len(preview_calls) == 1, (
+        "confirmation must obtain fresh evidence exactly once"
+    )
+    execute_calls = [
+        call
+        for call in _calls_in(confirm)
+        if _call_name(call) == _CONTROLLER_FUNCTION
+    ]
+    assert len(execute_calls) == 1, (
+        "confirmation must delegate to the execution controller exactly"
+        " once"
+    )
+    execute_lineno = execute_calls[0].lineno
+
+    for guard_node, guard_label in (
+        (decision_node, "the decision-evidence comparison"),
+        (drift_compares[0], "the entry-drift guard"),
+        (age_compares[0], "the review-age guard"),
+        (raw_stop_compares[0], "the raw stop-input guard"),
+    ):
+        assert guard_node.lineno < execute_lineno, (
+            f"{guard_label} must fail closed before execution"
+        )
+
+    guarded_returns = [
+        node
+        for node in ast.walk(confirm)
+        if isinstance(node, ast.If)
+        and any(isinstance(inner, ast.Return) for inner in ast.walk(node))
+    ]
+    assert len(guarded_returns) >= 5, (
+        "confirmation must fail closed on a missing preview, a changed"
+        " raw stop, an expired review, excessive drift, and changed"
+        " decision evidence"
+    )
+
+    review_again_messages = [
+        call
+        for call in _calls_in(confirm)
+        if isinstance(call.func, ast.Attribute)
+        and call.func.attr in {"error", "warning"}
+        and any(
+            "review again" in text.lower()
+            for text in _scope_string_constants(call)
+        )
+    ]
+    assert review_again_messages, (
+        "a blocked confirmation must tell the operator to review again"
+    )
+
+    # --- Stored preview cleared on failure and after success ---
+    session_pops = [
+        node
+        for node in ast.walk(confirm)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "pop"
+        and any(
+            isinstance(inner, ast.Attribute)
+            and inner.attr == "session_state"
+            for inner in ast.walk(node.func.value)
+        )
+    ]
+    assert any(node.lineno < execute_lineno for node in session_pops), (
+        "a failed guard must clear the stored preview"
+    )
+    assert any(node.lineno > execute_lineno for node in session_pops), (
+        "a successful execution must clear the stored preview"
+    )
+
+    # --- The execution controller stays the sole submission path ---
+    confirm_call_names = {
+        _call_name(call) for call in _calls_in(confirm)
+    }
+    assert not (
+        confirm_call_names
+        & {
+            "TradeOrchestrator",
+            "ProposalExecutionBridge",
+            "process_trade",
+            "place_order",
+            "mark_executed",
+        }
+    ), "confirmation must submit only through the execution controller"
