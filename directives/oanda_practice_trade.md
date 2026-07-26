@@ -46,29 +46,47 @@ Confirm all of the following before any review or submission, without recording 
    - is never invented, inferred, defaulted, or substituted by the system;
    - should be directionally valid: below the entry for a LONG proposal and above the entry for a SHORT proposal.
 4. Click `Review Trade`. This action must not submit an order. Inspect every displayed evidence value:
-   - proposal ID, pair, and direction;
+   - proposal identity, pair, and direction;
+   - risk fraction;
+   - protective stop and the raw protective-stop input;
+   - drawdown state;
    - entry price;
    - integer units;
-   - risk fraction and monetary risk amount;
-   - protective stop;
-   - drawdown fraction;
-   - quote timestamp;
-   - raw protective-stop input.
+   - monetary risk amount;
+   - quote timestamp.
 
    The advisory proposal size and the final calculated integer units are different concepts; only the calculated integer units are submitted.
-5. Review again whenever:
-   - the protective-stop input changes;
-   - the quote, units, risk, drawdown, timestamp, or any other displayed evidence changes;
-   - the dashboard reports that evidence changed or says to review again;
-   - preview or quote resolution fails.
+5. Understand what must stay fixed and what may move before confirming. Confirmation obtains fresh evidence, so the two groups behave differently.
 
-   Never bypass, weaken, or repeatedly race this check.
-6. Click `Confirm Practice Order` exactly once, and only after the displayed evidence has been reviewed and remains unchanged. Stop immediately after clicking and wait for one clear success or failure result. Do not:
+   These operator-controlled decision fields must remain exact:
+   - proposal identity;
+   - pair;
+   - direction;
+   - risk fraction;
+   - protective stop and raw stop input;
+   - drawdown state.
+
+   These market-derived fields may change, because confirmation re-resolves them:
+   - entry price;
+   - units;
+   - risk amount;
+   - quote timestamp.
+6. Click `Confirm Practice Order` exactly once. It is a separate, explicit human action and is never combined with `Review Trade`. Stop immediately after clicking and wait for one clear success or failure result. Do not:
    - double-click;
    - confirm another proposal;
    - retry after an ambiguous result;
    - place a parallel manual order;
    - use any obsolete Execute Trade procedure.
+
+   Confirmation fails closed and requires `Review Trade` again when:
+   - any operator-controlled decision field changed;
+   - the stored review is older than 120 seconds;
+   - entry-price drift exceeds 2 pips;
+   - the fresh quote, approval, drawdown, risk, or execution checks fail.
+
+   The freshly recalculated units and risk amount are the confirmation-time values. The earlier reviewed values are indicative only and are not guaranteed broker-fill values.
+
+   A failed confirmation means no broker order was submitted. Read the displayed error, correct the cause, and perform a new review. Never bypass, weaken, or repeatedly click through this check.
 
 ## Verification evidence
 

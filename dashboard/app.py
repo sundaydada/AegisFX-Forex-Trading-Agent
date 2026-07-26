@@ -47,6 +47,12 @@ MAX_QUOTE_AGE_SECONDS = 60.0
 # Display bound only — the full pending history stays in the database
 # and in pending_proposals for totals and analytics.
 PENDING_DISPLAY_LIMIT = 50
+# Confirmation-time bounds. Market-derived evidence is re-resolved at
+# confirmation, so the entry may drift within this band and the reviewed
+# evidence must still be recent; anything beyond either bound sends the
+# operator back to Review Trade.
+MAX_ENTRY_DRIFT_PIPS = 2.0
+REVIEW_MAX_AGE_SECONDS = 120.0
 
 
 @st.cache_data(ttl=30)
@@ -659,24 +665,68 @@ if approved_proposals:
             )
             return
 
-        evidence_fields = (
+        # Operator-controlled evidence only. entry_price, units,
+        # risk_amount, and quote_timestamp are market-derived and are
+        # re-resolved at execution time, so they are bounded below
+        # rather than matched exactly.
+        decision_evidence_fields = (
             "proposal_id",
             "pair",
             "direction",
-            "entry_price",
-            "units",
             "risk_fraction",
-            "risk_amount",
             "stop_loss_price",
-            "drawdown_fraction",
-            "quote_timestamp",
             "raw_stop_loss_price",
+            "drawdown_fraction",
         )
 
         if raw_stop_loss_price != stored_preview.get("raw_stop_loss_price"):
             st.session_state.pop(preview_key, None)
             st.error(
                 "The protective stop input changed after review —"
+                " review again before confirming."
+            )
+            return
+
+        confirmation_now = datetime.now(timezone.utc)
+
+        reviewed_timestamp = stored_preview.get("quote_timestamp")
+        parsed_review_time = None
+        if isinstance(reviewed_timestamp, datetime):
+            parsed_review_time = reviewed_timestamp
+        elif isinstance(reviewed_timestamp, str):
+            review_text = reviewed_timestamp.strip()
+            if review_text.endswith("Z"):
+                review_text = review_text[:-1] + "+00:00"
+            try:
+                parsed_review_time = datetime.fromisoformat(review_text)
+            except ValueError:
+                parsed_review_time = None
+
+        review_age_seconds = None
+        if parsed_review_time is not None:
+            if parsed_review_time.tzinfo is None:
+                parsed_review_time = parsed_review_time.replace(
+                    tzinfo=timezone.utc
+                )
+            else:
+                parsed_review_time = parsed_review_time.astimezone(
+                    timezone.utc
+                )
+            # The quote resolver tolerates a small future-clock skew, so
+            # a slightly negative age is legitimate and clamps to zero.
+            review_age_seconds = max(
+                0.0,
+                (confirmation_now - parsed_review_time).total_seconds(),
+            )
+
+        if (
+            review_age_seconds is None
+            or review_age_seconds > REVIEW_MAX_AGE_SECONDS
+        ):
+            st.session_state.pop(preview_key, None)
+            st.error(
+                "The reviewed evidence is missing a usable quote time or"
+                f" is older than {REVIEW_MAX_AGE_SECONDS} seconds —"
                 " review again before confirming."
             )
             return
@@ -694,7 +744,7 @@ if approved_proposals:
                 approval_db_path="proposal_approvals.db",
                 max_currency_exposure=MAX_ALLOWED_EXPOSURE,
                 max_quote_age_seconds=MAX_QUOTE_AGE_SECONDS,
-                now_utc=datetime.now(timezone.utc),
+                now_utc=confirmation_now,
             )
         except Exception as e:
             st.session_state.pop(preview_key, None)
@@ -718,17 +768,63 @@ if approved_proposals:
             )
             return
 
-        changed_fields = [
+        changed_decision_fields = [
             field
-            for field in evidence_fields
+            for field in decision_evidence_fields
             if stored_preview.get(field) != fresh_preview.get(field)
         ]
-        if changed_fields:
+        if changed_decision_fields:
             st.session_state.pop(preview_key, None)
             st.error(
-                "Execution evidence changed since review ("
-                + ", ".join(changed_fields)
+                "Reviewed decision evidence changed ("
+                + ", ".join(changed_decision_fields)
                 + ") — review again before confirming."
+            )
+            return
+
+        base_currency, separator, quote_currency = str(
+            proposal.get("pair", "")
+        ).upper().partition("/")
+        pair_is_valid = (
+            separator == "/"
+            and len(base_currency) == 3
+            and len(quote_currency) == 3
+            and base_currency.isalpha()
+            and quote_currency.isalpha()
+        )
+        pip_size = 0.01 if quote_currency == "JPY" else 0.0001
+
+        try:
+            reviewed_entry_price = float(
+                stored_preview.get("entry_price")
+            )
+            fresh_entry_price = float(fresh_preview.get("entry_price"))
+        except (TypeError, ValueError):
+            reviewed_entry_price = 0.0
+            fresh_entry_price = 0.0
+
+        entry_prices_are_valid = (
+            0.0 < reviewed_entry_price < float("inf")
+            and 0.0 < fresh_entry_price < float("inf")
+        )
+
+        if not pair_is_valid or not entry_prices_are_valid:
+            st.session_state.pop(preview_key, None)
+            st.error(
+                "The entry-price evidence could not be compared —"
+                " review again before confirming."
+            )
+            return
+
+        entry_drift_pips = (
+            abs(fresh_entry_price - reviewed_entry_price) / pip_size
+        )
+        if entry_drift_pips > MAX_ENTRY_DRIFT_PIPS:
+            st.session_state.pop(preview_key, None)
+            st.error(
+                f"The entry price moved {entry_drift_pips:.1f} pips since"
+                f" review (maximum {MAX_ENTRY_DRIFT_PIPS} pips) —"
+                " review again before confirming."
             )
             return
 
