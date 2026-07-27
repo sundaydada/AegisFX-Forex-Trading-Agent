@@ -66,7 +66,13 @@ class PersistentTradeStateManager:
                 self._conn.commit()
                 return
 
-    def close_trade(self, request_id: str) -> None:
+    def close_trade(
+        self,
+        request_id: str,
+        *,
+        close_price=None,
+        exit_timestamp=None,
+    ) -> None:
         cursor = self._conn.execute(
             "SELECT id, trade_json FROM trades WHERE trade_json LIKE ?",
             (f'%"request_id": "{request_id}"%',),
@@ -76,7 +82,13 @@ class PersistentTradeStateManager:
             trade = json.loads(row[1])
             if trade.get("status") == "FILLED":
                 trade["status"] = "CLOSED"
+                # closed_at is the local state-transition clock and stays
+                # independent of the broker's exit_timestamp.
                 trade["closed_at"] = datetime.now(timezone.utc).isoformat()
+                if close_price is not None:
+                    trade["close_price"] = close_price
+                if exit_timestamp is not None:
+                    trade["exit_timestamp"] = exit_timestamp
                 self._conn.execute(
                     "UPDATE trades SET trade_json = ? WHERE id = ?",
                     (json.dumps(trade), row[0]),
