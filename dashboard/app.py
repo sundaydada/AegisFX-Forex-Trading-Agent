@@ -317,7 +317,11 @@ with pos_col:
 
                 if result.get("status") == "SUCCESS":
                     print(f"Broker close SUCCESS: {rid}")
-                    state_manager.close_trade(rid)
+                    state_manager.close_trade(
+                        rid,
+                        close_price=result.get("close_price"),
+                        exit_timestamp=result.get("timestamp"),
+                    )
                     print(f"State updated to CLOSED: {rid}")
                 else:
                     print(f"Broker close FAILED: {rid} — {result.get('reason')}")
@@ -357,7 +361,11 @@ with pos_col:
 
                             if result.get("status") == "SUCCESS":
                                 print(f"Broker close SUCCESS: {rid}")
-                                state_manager.close_trade(rid)
+                                state_manager.close_trade(
+                                    rid,
+                                    close_price=result.get("close_price"),
+                                    exit_timestamp=result.get("timestamp"),
+                                )
                                 print(f"State updated to CLOSED: {rid}")
                             else:
                                 print(f"Broker close FAILED: {rid} — {result.get('reason')}")

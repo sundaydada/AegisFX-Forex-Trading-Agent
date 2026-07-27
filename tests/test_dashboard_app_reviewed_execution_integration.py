@@ -1192,3 +1192,186 @@ def test_confirmation_pins_decision_evidence_and_tolerates_quote_drift():
             "mark_executed",
         }
     ), "confirmation must submit only through the execution controller"
+
+
+def _is_result_get(node, result_name, key):
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == result_name
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == key
+    )
+
+
+def _button_close_handlers(tree):
+    handlers = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        if not isinstance(node.test, ast.Call):
+            continue
+        if _call_name(node.test) != "button":
+            continue
+        if any(
+            _call_name(call) == "close_position"
+            for call in _calls_in(node)
+        ):
+            handlers.append(node)
+    return handlers
+
+
+def _success_guard(handler, result_name):
+    for node in ast.walk(handler):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare):
+            continue
+        if not any(isinstance(op, ast.Eq) for op in test.ops):
+            continue
+        if not _is_result_get(test.left, result_name, "status"):
+            continue
+        if not test.comparators:
+            continue
+        expected = test.comparators[0]
+        if (
+            isinstance(expected, ast.Constant)
+            and expected.value == "SUCCESS"
+        ):
+            return node
+    return None
+
+
+def _calls_named(nodes, name):
+    return [
+        call
+        for node in nodes
+        for call in _calls_in(node)
+        if _call_name(call) == name
+    ]
+
+
+def test_dashboard_close_handlers_persist_broker_close_evidence():
+    tree = _app_tree()
+
+    handlers = _button_close_handlers(tree)
+    assert len(handlers) == 2, (
+        "dashboard/app.py must expose exactly two broker-close handlers:"
+        " Close All Positions and the per-pair close button"
+    )
+
+    close_all = [
+        handler
+        for handler in handlers
+        if "Close All Positions" in _scope_string_constants(handler.test)
+    ]
+    per_pair = [handler for handler in handlers if handler not in close_all]
+    assert len(close_all) == 1, "Close All Positions handler not found"
+    assert len(per_pair) == 1, "per-pair close handler not found"
+
+    for label, handler in (
+        ("Close All Positions", close_all[0]),
+        ("Close {pair}", per_pair[0]),
+    ):
+        broker_calls = _calls_named([handler], "close_position")
+        assert len(broker_calls) == 1, (
+            f"{label} must call broker.close_position exactly once"
+        )
+        broker_call = broker_calls[0]
+        assert isinstance(broker_call.func, ast.Attribute)
+        assert isinstance(broker_call.func.value, ast.Name)
+        assert broker_call.func.value.id == "broker", (
+            f"{label} must close through the broker instance"
+        )
+        assert len(broker_call.args) == 3, (
+            f"{label} must keep the existing"
+            " close_position(pair, units, direction) call"
+        )
+
+        result_assignments = [
+            node
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Assign)
+            and node.value is broker_call
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ]
+        assert len(result_assignments) == 1, (
+            f"{label} must assign the broker close response to a local"
+            " variable so its evidence can be forwarded"
+        )
+        result_name = result_assignments[0].targets[0].id
+
+        guard = _success_guard(handler, result_name)
+        assert guard is not None, (
+            f"{label} must keep the"
+            f' {result_name}.get("status") == "SUCCESS" guard'
+        )
+
+        success_closes = _calls_named(guard.body, "close_trade")
+        assert len(success_closes) == 1, (
+            f"{label} must call state_manager.close_trade exactly once"
+            " inside the successful-close branch"
+        )
+        assert _calls_named(guard.orelse, "close_trade") == [], (
+            f"{label} must not close the local record when the broker"
+            " close failed"
+        )
+        assert len(_calls_named([handler], "close_trade")) == 1, (
+            f"{label} must not close the local record outside the"
+            " successful-close branch"
+        )
+
+        close_call = success_closes[0]
+        assert isinstance(close_call.func, ast.Attribute)
+        assert isinstance(close_call.func.value, ast.Name)
+        assert close_call.func.value.id == "state_manager"
+        assert len(close_call.args) == 1, (
+            f"{label} must pass the request ID as the existing"
+            " positional argument"
+        )
+        assert isinstance(close_call.args[0], ast.Name)
+
+        close_keywords = {kw.arg: kw.value for kw in close_call.keywords}
+        assert set(close_keywords) == {"close_price", "exit_timestamp"}, (
+            f"{label} must forward exactly close_price and"
+            " exit_timestamp from the broker close response"
+        )
+        assert _is_result_get(
+            close_keywords["close_price"],
+            result_name,
+            "close_price",
+        ), (
+            f"{label} must source close_price from"
+            f' {result_name}.get("close_price")'
+        )
+        assert _is_result_get(
+            close_keywords["exit_timestamp"],
+            result_name,
+            "timestamp",
+        ), (
+            f"{label} must source exit_timestamp from"
+            f' {result_name}.get("timestamp")'
+        )
+
+        failure_reasons = [
+            call
+            for node in guard.orelse
+            for call in _calls_in(node)
+            if _is_result_get(call, result_name, "reason")
+        ]
+        assert failure_reasons, (
+            f"{label} must keep reporting the broker's failure reason"
+        )
+
+        handler_call_names = {
+            _call_name(call) for call in _calls_in(handler)
+        }
+        assert not (
+            handler_call_names
+            & {"execute", "executemany", "commit", "update_trade"}
+        ), f"{label} must not write to the trade database directly"
