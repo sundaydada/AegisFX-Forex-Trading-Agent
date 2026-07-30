@@ -6,12 +6,30 @@ opens no database, makes no network call, and never invokes a
 collaborator. An unready wiring is reported as data, never raised, and
 credentials never appear in the result.
 
-Importing this module defines one constant and a few pure functions and
-does nothing else.
+build_dependencies composes the practice-only dependency bundle. It is
+the only function here that constructs anything; importing this module
+binds collaborators and defines functions, but opens no database, reads
+no environment variable, and makes no network call.
 """
 
 import inspect
 import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+from ai.market_analysis_service import MarketAnalysisService
+from ai.proposal_approval_queue import ProposalApprovalQueue
+from ai.strategy_recommendation_service import StrategyRecommendationService
+from autonomy_usdcad_signal import UsdCadSignalProvider
+from brokers.oanda_broker import OandaBroker
+from dashboard.reviewed_execution_controller import (
+    execute_reviewed_proposal_from_dashboard,
+)
+from execution.persistent_trade_state_manager import (
+    PersistentTradeStateManager,
+)
+from market_data.alpha_vantage_price_feed import get_fx_intraday
+from market_data.market_context import build_market_context
 
 PRACTICE_BASE_URL = "https://api-fxpractice.oanda.com"
 
@@ -274,4 +292,97 @@ def check_readiness(dependencies: dict) -> dict:
         "ready": not failures,
         "checks": checks,
         "failures": failures,
+    }
+
+
+def build_dependencies(
+    *,
+    api_key: str,
+    account_id: str,
+    repo_root=None,
+) -> dict:
+    """Construct the practice-only dependency bundle run_cycle needs.
+
+    The endpoint is the module constant — never an argument, never an
+    environment variable — so a live account is unreachable through this
+    API. now_utc is taken inside the executor, so every call is stamped
+    with its own time rather than with build time.
+    """
+
+    root = (
+        Path(repo_root).resolve()
+        if repo_root is not None
+        else Path(__file__).resolve().parent
+    )
+
+    trade_state_db_path = str(root / "dry_run_sustained.db")
+    drawdown_db_path = str(root / "drawdown_high_water.db")
+    start_of_day_nav_db_path = str(root / "start_of_day_nav.db")
+    approval_db_path = str(root / "proposal_approvals.db")
+
+    config = {
+        "api_key": api_key,
+        "account_id": account_id,
+        "base_url": PRACTICE_BASE_URL,
+        "trade_state_db_path": trade_state_db_path,
+        "drawdown_db_path": drawdown_db_path,
+        "start_of_day_nav_db_path": start_of_day_nav_db_path,
+        "approval_db_path": approval_db_path,
+    }
+
+    broker = OandaBroker(
+        api_key=api_key,
+        account_id=account_id,
+        base_url=PRACTICE_BASE_URL,
+    )
+
+    state_manager = PersistentTradeStateManager(
+        db_path=trade_state_db_path,
+    )
+
+    proposal_queue = ProposalApprovalQueue(
+        db_path=approval_db_path,
+    )
+
+    analysis_service = MarketAnalysisService()
+
+    signal_provider = UsdCadSignalProvider(
+        fetch_intraday=get_fx_intraday,
+        build_context=build_market_context,
+        analysis_service=analysis_service,
+        recommend_strategy=(
+            StrategyRecommendationService.recommend_strategy
+        ),
+    )
+
+    def executor(*, proposal, raw_stop_loss_price):
+        return execute_reviewed_proposal_from_dashboard(
+            proposal=proposal,
+            raw_stop_loss_price=raw_stop_loss_price,
+            api_key=api_key,
+            account_id=account_id,
+            base_url=PRACTICE_BASE_URL,
+            trade_state_db_path=trade_state_db_path,
+            drawdown_db_path=drawdown_db_path,
+            start_of_day_nav_db_path=start_of_day_nav_db_path,
+            approval_db_path=approval_db_path,
+            max_currency_exposure=100.0,
+            max_quote_age_seconds=60.0,
+            now_utc=datetime.now(timezone.utc),
+        )
+
+    # The readiness gate inspects these attributes without calling it.
+    executor.base_url = PRACTICE_BASE_URL
+    executor.trade_state_db_path = trade_state_db_path
+    executor.drawdown_db_path = drawdown_db_path
+    executor.start_of_day_nav_db_path = start_of_day_nav_db_path
+    executor.approval_db_path = approval_db_path
+
+    return {
+        "config": config,
+        "broker": broker,
+        "state_manager": state_manager,
+        "signal_provider": signal_provider,
+        "proposal_queue": proposal_queue,
+        "executor": executor,
     }

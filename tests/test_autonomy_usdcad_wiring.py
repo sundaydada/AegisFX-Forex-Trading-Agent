@@ -11,6 +11,7 @@ collection stays clean either way.
 """
 
 import importlib
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -378,3 +379,164 @@ def test_check_readiness_blocks_unsafe_or_inconsistent_wiring(
 
     _assert_credentials_redacted(result, case_name)
     _assert_no_collaborator_calls(dependencies, case_name)
+
+
+def test_build_dependencies_constructs_minimal_practice_wiring(
+    tmp_path,
+    monkeypatch,
+):
+    """Assemble a ready practice-only wiring; nothing real is reached."""
+
+    wiring = importlib.import_module("autonomy_usdcad_wiring")
+
+    broker_kwargs = []
+    provider_kwargs = []
+    controller_calls = []
+    controller_result = object()
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("wiring must not call a collaborator")
+
+    class _Strategy:
+        recommend_strategy = staticmethod(_fail)
+
+    class _AnalysisService:
+        analyze_market_context = _fail
+
+    def _make_broker(**kwargs):
+        broker_kwargs.append(dict(kwargs))
+        return _NeverCalledBroker(kwargs.get("base_url"))
+
+    def _make_state_manager(**kwargs):
+        return _NeverCalledStateManager(kwargs["db_path"])
+
+    def _make_proposal_queue(**kwargs):
+        return _NeverCalledProposalQueue(kwargs["db_path"])
+
+    def _make_provider(**kwargs):
+        provider_kwargs.append(dict(kwargs))
+        return _NeverCalledSignalProvider()
+
+    def _record_controller(**kwargs):
+        controller_calls.append(dict(kwargs))
+        return controller_result
+
+    # raising=False: these module attributes do not exist yet.
+    for name, value in (
+        ("OandaBroker", _make_broker),
+        ("PersistentTradeStateManager", _make_state_manager),
+        ("ProposalApprovalQueue", _make_proposal_queue),
+        ("UsdCadSignalProvider", _make_provider),
+        ("get_fx_intraday", _fail),
+        ("build_market_context", _fail),
+        ("MarketAnalysisService", lambda *a, **k: _AnalysisService()),
+        ("StrategyRecommendationService", _Strategy),
+        ("execute_reviewed_proposal_from_dashboard", _record_controller),
+    ):
+        monkeypatch.setattr(wiring, name, value, raising=False)
+
+    dependencies = wiring.build_dependencies(
+        api_key="demo-api-key",
+        account_id="demo-account-id",
+        repo_root=tmp_path,
+    )
+
+    expected_paths = {
+        "trade_state_db_path": str(tmp_path / "dry_run_sustained.db"),
+        "drawdown_db_path": str(tmp_path / "drawdown_high_water.db"),
+        "start_of_day_nav_db_path": str(tmp_path / "start_of_day_nav.db"),
+        "approval_db_path": str(tmp_path / "proposal_approvals.db"),
+    }
+
+    assert set(dependencies) == {
+        "config", "broker", "state_manager",
+        "signal_provider", "proposal_queue", "executor",
+    }, f"got dependency keys {sorted(dependencies)!r}"
+
+    config = dependencies["config"]
+    assert config["base_url"] == PRACTICE_BASE_URL, (
+        f"got configured base_url {config['base_url']!r}"
+    )
+    for key, path in expected_paths.items():
+        assert config[key] == path, f"got {key} {config[key]!r}"
+
+    # The readiness gate owns the endpoint, path and interface checks.
+    readiness = wiring.check_readiness(dependencies)
+    assert readiness["ready"] is True, (
+        f"built wiring must be ready; failures {readiness['failures']!r}"
+    )
+    assert readiness["failures"] == []
+
+    assert broker_kwargs == [{
+        "api_key": "demo-api-key",
+        "account_id": "demo-account-id",
+        "base_url": PRACTICE_BASE_URL,
+    }], f"got broker constructions {broker_kwargs!r}"
+
+    assert len(provider_kwargs) == 1, (
+        f"got {len(provider_kwargs)} signal provider construction(s)"
+    )
+    assert set(provider_kwargs[0]) == {
+        "fetch_intraday", "build_context",
+        "analysis_service", "recommend_strategy",
+    }, f"got signal provider kwargs {sorted(provider_kwargs[0])!r}"
+
+    assert controller_calls == [], (
+        "build_dependencies must bind the executor, not execute a trade"
+    )
+
+    proposal = {"proposal_id": "PROP-AUTO-TEST"}
+    result = dependencies["executor"](
+        proposal=proposal,
+        raw_stop_loss_price=1.40000,
+    )
+
+    assert result is controller_result, (
+        "the executor must return the reviewed controller's result"
+    )
+    assert len(controller_calls) == 1, (
+        f"got {len(controller_calls)} controller call(s)"
+    )
+
+    call = controller_calls[0]
+    assert call["proposal"] is proposal, "the proposal must be forwarded"
+    assert call["base_url"] == PRACTICE_BASE_URL, (
+        f"got forwarded base_url {call['base_url']!r}"
+    )
+    for key, path in expected_paths.items():
+        assert call[key] == path, f"got forwarded {key} {call[key]!r}"
+
+    now_utc = call["now_utc"]
+    assert isinstance(now_utc, datetime), f"got {type(now_utc)!r}"
+    assert now_utc.tzinfo is not None, "now_utc must be timezone-aware"
+    assert now_utc.utcoffset() == timedelta(0), (
+        f"now_utc must be UTC; got offset {now_utc.utcoffset()!r}"
+    )
+
+
+def test_real_state_manager_exposes_configured_db_path(tmp_path):
+    """check_readiness reads the public db_path, so it must exist."""
+
+    from execution.persistent_trade_state_manager import (
+        PersistentTradeStateManager,
+    )
+
+    db_path = str(tmp_path / "state.db")
+    collaborator = PersistentTradeStateManager(db_path=db_path)
+    try:
+        assert collaborator.db_path == db_path
+    finally:
+        collaborator._conn.close()
+
+
+def test_real_proposal_queue_exposes_configured_db_path(tmp_path):
+    """check_readiness reads the public db_path, so it must exist."""
+
+    from ai.proposal_approval_queue import ProposalApprovalQueue
+
+    db_path = str(tmp_path / "approvals.db")
+    collaborator = ProposalApprovalQueue(db_path=db_path)
+    try:
+        assert collaborator.db_path == db_path
+    finally:
+        collaborator._conn.close()

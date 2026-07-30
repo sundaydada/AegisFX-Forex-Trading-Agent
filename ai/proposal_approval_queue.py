@@ -12,6 +12,7 @@ class ProposalApprovalQueue:
     """
 
     def __init__(self, db_path: str = "proposal_approvals.db"):
+        self.db_path = db_path
         self._db_path = db_path
         self._conn = sqlite3.connect(db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")

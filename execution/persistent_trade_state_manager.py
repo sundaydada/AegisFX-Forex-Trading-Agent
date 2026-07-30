@@ -12,6 +12,7 @@ class PersistentTradeStateManager:
     """
 
     def __init__(self, db_path: str = "trade_state.db"):
+        self.db_path = db_path
         self._conn = sqlite3.connect(db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
