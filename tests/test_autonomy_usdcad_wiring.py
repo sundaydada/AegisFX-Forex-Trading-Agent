@@ -540,3 +540,19 @@ def test_real_proposal_queue_exposes_configured_db_path(tmp_path):
         assert collaborator.db_path == db_path
     finally:
         collaborator._conn.close()
+
+
+def test_real_oanda_broker_exposes_configured_base_url():
+    """check_readiness reads the public base_url, so it must exist."""
+
+    from brokers.oanda_broker import OandaBroker
+
+    base_url = "https://api-fxpractice.oanda.com"
+
+    broker = OandaBroker(
+        api_key="test-key",
+        account_id="test-account",
+        base_url=base_url,
+    )
+
+    assert broker.base_url == base_url

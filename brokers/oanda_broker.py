@@ -99,6 +99,7 @@ class OandaBroker(BrokerInterface):
         self._api_key = api_key
         self._account_id = account_id
         self._base_url = base_url
+        self.base_url = base_url
         self.health = health or BrokerHealthMonitor()
 
     def _make_request(self, endpoint: str, method: str = "GET", body: Dict = None) -> Dict:
