@@ -293,6 +293,9 @@ class OandaBroker(BrokerInterface):
             return {
                 "execution_status": "Filled",
                 "broker_order_id": fill.get("id", ""),
+                "broker_trade_id": (
+                    (fill.get("tradeOpened") or {}).get("tradeID", "")
+                ),
                 "currency_pair": order["currency_pair"],
                 "direction": order["direction"],
                 "units": abs(float(fill.get("units", 0))),

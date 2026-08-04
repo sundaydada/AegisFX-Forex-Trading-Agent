@@ -156,3 +156,73 @@ def test_preserves_stop_loss_precision_without_rounding(monkeypatch):
     assert calls[0][2]["order"]["stopLossOnFill"] == {
         "price": "1.0956789",
     }
+
+
+def test_place_order_returns_opened_trade_id_distinct_from_fill_transaction(
+    monkeypatch,
+):
+    """The opened Trade ID is not the fill transaction ID.
+
+    OANDA returns orderFillTransaction.id (the fill transaction) and
+    orderFillTransaction.tradeOpened.tradeID (the trade it opened) as
+    independent identifiers. The fake response below gives them
+    deliberately different values so an implementation that returns one
+    for both cannot pass.
+    """
+
+    from brokers.oanda_broker import OandaBroker
+
+    broker = OandaBroker(
+        api_key="unused-test-key",
+        account_id="unused-test-account",
+        base_url="https://example.invalid",
+    )
+
+    def fake_request(endpoint, method="GET", body=None):
+        return {
+            "orderFillTransaction": {
+                "id": "900",
+                "tradeOpened": {
+                    "tradeID": "777",
+                },
+                "units": "5000",
+                "price": "1.40880",
+                "time": "2026-07-27T12:00:00.000000000Z",
+            }
+        }
+
+    monkeypatch.setattr(broker, "_make_request", fake_request)
+
+    order = {
+        "currency_pair": "USD/CAD",
+        "direction": "Long",
+        "position_size": 5000,
+        "stop_loss_price": 1.40680,
+    }
+
+    result = broker.place_order(order)
+
+    assert result["execution_status"] == "Filled"
+    assert result["broker_order_id"] == "900"
+    assert result["broker_trade_id"] == "777"
+    assert result["broker_order_id"] != result["broker_trade_id"], (
+        "the fill transaction id and the opened trade id must not be"
+        " taken from the same response field"
+    )
+
+    assert result["currency_pair"] == "USD/CAD"
+    assert result["direction"] == "Long"
+    assert result["units"] == 5000.0
+    assert result["fill_price"] == 1.40880
+    assert result["timestamp"] == "2026-07-27T12:00:00.000000000Z"
+
+    assert set(result) == {
+        "execution_status",
+        "broker_order_id",
+        "broker_trade_id",
+        "currency_pair",
+        "direction",
+        "units",
+        "fill_price",
+        "timestamp",
+    }, f"got result keys {sorted(result)!r}"
