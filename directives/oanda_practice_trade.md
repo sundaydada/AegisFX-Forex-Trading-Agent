@@ -94,11 +94,45 @@ On success, record without secrets:
 
 - proposal ID;
 - dashboard execution result;
-- broker order or trade ID;
+- broker order ID and broker trade ID;
 - pair, direction, and units;
 - protective stop;
 - number of open OANDA positions;
 - UTC timestamp.
+
+### Broker identifiers
+
+A filled OANDA order returns two distinct identifiers. Both are recorded
+on the local trade row and neither substitutes for the other.
+
+- `broker_order_id` = `orderFillTransaction.id` — the opening fill
+  transaction ID. Use it to look up that transaction.
+- `broker_trade_id` = `orderFillTransaction.tradeOpened.tradeID` — the
+  actual opened OANDA Trade ID. Use it to identify the trade itself.
+
+The identifiers must never be assumed equal. They are independent values,
+and treating one as the other can retrieve the wrong broker record.
+
+`broker_order_id` must not be renamed or repurposed. Existing consumers
+depend on it meaning the fill transaction ID.
+
+Newly filled trades persist `broker_trade_id` automatically: the broker
+result is forwarded unchanged through the reviewed execution path and
+merged into the JSON trade row, so no additional persistence step is
+required.
+
+Historical trade rows recorded before this field existed may not contain
+`broker_trade_id`. Consumers must therefore read it with `.get()` and
+tolerate its absence.
+
+A missing or empty `broker_trade_id` must cause reconciliation to fail
+closed. It must never be guessed, derived, or substituted from
+`broker_order_id`.
+
+This behavior is verified by
+`tests/test_oanda_order_submission.py::test_place_order_returns_opened_trade_id_distinct_from_fill_transaction`,
+which supplies deliberately different values (`id` `"900"` and
+`tradeOpened.tradeID` `"777"`) and requires both to be returned distinctly.
 
 Verify in the OANDA DEMO portal that exactly one expected practice position exists. On any mismatch, duplicate, unclear result, or missing broker ID, stop without another submission.
 
