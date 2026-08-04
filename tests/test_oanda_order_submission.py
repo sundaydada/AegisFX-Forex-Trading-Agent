@@ -226,3 +226,84 @@ def test_place_order_returns_opened_trade_id_distinct_from_fill_transaction(
         "fill_price",
         "timestamp",
     }, f"got result keys {sorted(result)!r}"
+
+
+def test_place_order_returns_empty_trade_id_when_trade_opened_is_unavailable(
+    monkeypatch,
+):
+    """A fill that opens no trade must yield an empty trade id.
+
+    OANDA omits tradeOpened on fills that do not open a trade, and can
+    also return it explicitly as null. Both must degrade to an empty
+    broker_trade_id: the fill must still be reported as Filled, and the
+    fill transaction id must never be substituted for the missing trade
+    id. Every other result field must be unaffected.
+    """
+
+    from brokers.oanda_broker import OandaBroker
+
+    base_fill = {
+        "id": "900",
+        "units": "5000",
+        "price": "1.40880",
+        "time": "2026-07-27T12:00:00.000000000Z",
+    }
+
+    missing_fill = dict(base_fill)
+
+    null_fill = dict(base_fill)
+    null_fill["tradeOpened"] = None
+
+    order = {
+        "currency_pair": "USD/CAD",
+        "direction": "Long",
+        "position_size": 5000,
+        "stop_loss_price": 1.40680,
+    }
+
+    for case_name, fill in (
+        ("missing tradeOpened", missing_fill),
+        ("null tradeOpened", null_fill),
+    ):
+        broker = OandaBroker(
+            api_key="unused-test-key",
+            account_id="unused-test-account",
+            base_url="https://example.invalid",
+        )
+
+        def fake_request(endpoint, method="GET", body=None, fill=fill):
+            return {"orderFillTransaction": fill}
+
+        monkeypatch.setattr(broker, "_make_request", fake_request)
+
+        result = broker.place_order(order)
+
+        assert result["execution_status"] == "Filled", (
+            f"[{case_name}] an unavailable tradeOpened must not reject the"
+            f" fill; got {result!r}"
+        )
+        assert result["broker_order_id"] == "900", (
+            f"[{case_name}] got broker_order_id"
+            f" {result['broker_order_id']!r}"
+        )
+        assert result["broker_trade_id"] == "", (
+            f"[{case_name}] an unavailable tradeOpened must yield an empty"
+            " broker_trade_id, never the fill transaction id; got"
+            f" {result['broker_trade_id']!r}"
+        )
+
+        assert result["currency_pair"] == "USD/CAD", (
+            f"[{case_name}] got currency_pair {result['currency_pair']!r}"
+        )
+        assert result["direction"] == "Long", (
+            f"[{case_name}] got direction {result['direction']!r}"
+        )
+        assert result["units"] == 5000.0, (
+            f"[{case_name}] got units {result['units']!r}"
+        )
+        assert result["fill_price"] == 1.40880, (
+            f"[{case_name}] got fill_price {result['fill_price']!r}"
+        )
+        assert result["timestamp"] == "2026-07-27T12:00:00.000000000Z", (
+            f"[{case_name}] got timestamp {result['timestamp']!r}"
+        )
