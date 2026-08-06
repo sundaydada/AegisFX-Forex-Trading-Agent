@@ -541,6 +541,53 @@ class OandaBroker(BrokerInterface):
             },
         }
 
+    def get_trade_details(self, trade_id: str) -> Dict:
+        """Look up and normalize one OANDA Trade by its Trade ID."""
+
+        if not isinstance(trade_id, str) or not trade_id.strip():
+            return {
+                "lookup_status": "INVALID_REQUEST",
+                "reason": "trade_id must be a non-empty string",
+            }
+
+        data = self._make_request(f"/trades/{trade_id}")
+
+        trade = data["trade"]
+
+        state = trade["state"]
+
+        # OANDA omits close fields while a Trade is not yet CLOSED.
+        # Genuine close evidence remains mandatory for CLOSED Trades:
+        # a missing close price must fail rather than default, because
+        # a defaulted price is unusable evidence that still looks real.
+        # The allowed states are listed explicitly so an unknown future
+        # state does not silently receive non-closed defaults.
+        if state in {"OPEN", "CLOSE_WHEN_TRADEABLE"}:
+            average_close_price = None
+            close_time = ""
+            closing_transaction_ids = []
+        else:
+            average_close_price = float(trade["averageClosePrice"])
+            close_time = trade["closeTime"]
+            closing_transaction_ids = list(
+                trade["closingTransactionIDs"]
+            )
+
+        return {
+            "lookup_status": "FOUND",
+            "broker_trade_id": trade["id"],
+            "currency_pair": trade["instrument"].replace("_", "/"),
+            "state": state,
+            "open_price": float(trade["price"]),
+            "open_time": trade["openTime"],
+            "initial_units": float(trade["initialUnits"]),
+            "current_units": float(trade["currentUnits"]),
+            "realized_pl": float(trade["realizedPL"]),
+            "average_close_price": average_close_price,
+            "close_time": close_time,
+            "closing_transaction_ids": closing_transaction_ids,
+        }
+
     def close_position(self, currency_pair: str, units: float, direction: str) -> Dict:
         """
         Close a position by sending the opposite market order.
