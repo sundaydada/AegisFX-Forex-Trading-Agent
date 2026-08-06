@@ -5,8 +5,7 @@ the response into repository conventions: slash-form pairs, float
 numerics with the unit sign preserved, and verbatim timestamps. It must
 never submit an order, close a position, or otherwise mutate anything.
 
-The method does not exist yet; _make_request is patched so no HTTP
-request is possible either way.
+_make_request is patched in every test, so no HTTP request is possible.
 """
 
 
