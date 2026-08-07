@@ -10,7 +10,7 @@ non-tradeable or submits exactly one uniquely identified proposal,
 approves that exact proposal, re-reads it by identity, and executes it
 once with a mandatory protective stop through the injected reviewed
 executor; when they agree that a position is open it reports that and
-stops. Position closure is not implemented yet.
+stops. Broker-confirmed closed trades can be reconciled to local state.
 
 Importing this module constructs nothing, reads no environment
 variables, opens no database, makes no network call, and starts no loop.
@@ -19,6 +19,8 @@ variables, opens no database, makes no network call, and starts no loop.
 from math import isfinite
 from typing import Dict, List
 from uuid import uuid4
+
+from autonomy_usdcad_reconcile import reconcile_closed_usdcad_trade
 
 PRACTICE_BASE_URL = "https://api-fxpractice.oanda.com"
 USDCAD_PIP_SIZE = 0.0001
@@ -62,8 +64,9 @@ def run_cycle(
     Otherwise reads the broker's open positions once and the local trade
     ledger once. A disagreement between the broker open-position count
     and the local FILLED-trade count blocks the cycle: no signal is
-    requested, no proposal is created or approved, nothing is executed,
-    and no broker close is attempted.
+    requested, no proposal is created or approved, and nothing is
+    executed. Reconciliation is read-only against the broker and never
+    submits a close order.
 
     When both counts are zero the cycle requests exactly one USD/CAD
     signal and returns it unmodified. A signal is tradeable only when
@@ -104,6 +107,16 @@ def run_cycle(
 
     broker_open_count = len(broker_positions)
     local_filled_count = len(local_filled)
+
+    if broker_open_count == 0 and local_filled_count == 1:
+        reconciliation = reconcile_closed_usdcad_trade(
+            broker=broker,
+            state_manager=state_manager,
+            broker_positions=broker_positions,
+            local_filled=local_filled,
+        )
+        if reconciliation.get("outcome") == "RECONCILED_CLOSED_TRADE":
+            return reconciliation
 
     if broker_open_count != local_filled_count:
         return {

@@ -1793,3 +1793,124 @@ def test_cycle_blocks_when_executor_does_not_return_strict_filled_success(
     assert broker.close_position_calls == [], (
         f"[{label}] the cycle must not close any position"
     )
+
+
+CLOSED_TRADE_DETAILS = {
+    "lookup_status": "FOUND",
+    "broker_trade_id": "777",
+    "currency_pair": "USD/CAD",
+    "state": "CLOSED",
+    "average_close_price": 1.40294,
+    "close_time": "2026-08-03T01:29:59.000000000Z",
+    "realized_pl": -424.48,
+}
+
+RECONCILABLE_LOCAL_TRADE = {
+    "request_id": "AI-PROPOSAL-TEST",
+    "currency_pair": "USD/CAD",
+    "status": "FILLED",
+    "broker_trade_id": "777",
+}
+
+
+class _LookupBroker(_RecordingBroker):
+    """A flat broker that can also report one closed Trade."""
+
+    def __init__(self, details):
+        super().__init__([])
+        self._details = details
+        self.get_trade_details_calls = []
+
+    def get_trade_details(self, trade_id):
+        self.get_trade_details_calls.append(trade_id)
+        return dict(self._details)
+
+
+class _ClosingStateManager(_RecordingStateManager):
+    """Records the close evidence written back to the local ledger."""
+
+    def __init__(self, trades):
+        super().__init__(trades)
+        self.close_trade_calls = []
+
+    def close_trade(self, request_id, *, close_price, exit_timestamp):
+        self.close_trade_calls.append(
+            (
+                request_id,
+                {
+                    "close_price": close_price,
+                    "exit_timestamp": exit_timestamp,
+                },
+            )
+        )
+
+
+def test_cycle_reconciles_confirmed_broker_closed_trade_before_mismatch():
+    """A broker-confirmed close must heal state, not block the cycle.
+
+    Broker flat with one local FILLED row is exactly what a broker-side
+    close leaves behind. Today that is a dead-end mismatch; once the
+    broker confirms the close, the cycle must record the exit evidence
+    and stop there rather than opening anything new.
+    """
+
+    cycle = importlib.import_module(MODULE_NAME)
+
+    broker = _LookupBroker(CLOSED_TRADE_DETAILS)
+    state_manager = _ClosingStateManager([RECONCILABLE_LOCAL_TRADE])
+    signal_provider = _RecordingSignalProvider()
+    proposal_queue = _RecordingProposalQueue()
+    executor = _RecordingExecutor()
+
+    result = cycle.run_cycle(
+        broker=broker,
+        state_manager=state_manager,
+        signal_provider=signal_provider,
+        proposal_queue=proposal_queue,
+        executor=executor,
+    )
+
+    assert result == {
+        "outcome": "RECONCILED_CLOSED_TRADE",
+        "request_id": "AI-PROPOSAL-TEST",
+        "broker_trade_id": "777",
+        "close_price": 1.40294,
+        "exit_timestamp": "2026-08-03T01:29:59.000000000Z",
+        "realized_pl": -424.48,
+    }, f"got {result!r}"
+
+    # --- one lookup, keyed on the broker trade id ---
+    assert broker.get_trade_details_calls == ["777"], (
+        f"got trade lookups {broker.get_trade_details_calls!r}"
+    )
+
+    # --- the broker's own close evidence is written back once ---
+    assert state_manager.close_trade_calls == [
+        (
+            "AI-PROPOSAL-TEST",
+            {
+                "close_price": 1.40294,
+                "exit_timestamp": "2026-08-03T01:29:59.000000000Z",
+            },
+        )
+    ], f"got close_trade calls {state_manager.close_trade_calls!r}"
+
+    # --- reconciling ends the cycle: nothing new is opened ---
+    assert signal_provider.calls == [], (
+        "a reconciling cycle must not request a signal"
+    )
+    assert proposal_queue.add_proposals_calls == [], (
+        "a reconciling cycle must not create a proposal"
+    )
+    assert proposal_queue.approve_proposal_calls == [], (
+        "a reconciling cycle must not approve a proposal"
+    )
+    assert executor.calls == [], (
+        "a reconciling cycle must not execute anything"
+    )
+    assert broker.place_order_calls == [], (
+        "a reconciling cycle must not submit an order"
+    )
+    assert broker.close_position_calls == [], (
+        "reconciliation records an existing close; it must not send one"
+    )
