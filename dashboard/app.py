@@ -41,6 +41,8 @@ from dashboard.production_view import (
     render_system_status_tiles,
 )
 from dashboard.theme import apply_dashboard_theme
+from autonomy_usdcad_cycle import run_cycle
+from autonomy_usdcad_wiring import build_dependencies, check_readiness
 
 MAX_ALLOWED_EXPOSURE = 100.0
 MAX_QUOTE_AGE_SECONDS = 60.0
@@ -1523,6 +1525,65 @@ if reset_clicked:
         st.rerun()
     except Exception as e:
         st.error(f"Failed to reset settings: {e}")
+
+st.divider()
+
+# --- Autonomous USD/CAD MVP ---
+st.subheader("Autonomous USD/CAD MVP")
+st.caption(
+    "OANDA Practice · USD/CAD only · one cycle per click. "
+    "Nothing runs on page refresh."
+)
+
+autonomous_local_filled = [
+    trade for trade in all_trades
+    if trade.get("status") == "FILLED"
+]
+
+auto_col1, auto_col2 = st.columns(2)
+auto_col1.metric("Broker open positions", len(positions))
+auto_col2.metric("Local FILLED trades", len(autonomous_local_filled))
+
+# run_cycle is reached only from inside this branch. The page reruns
+# every 2 seconds; st.button is True only on the rerun that follows a
+# click, so a refresh can never start a cycle.
+if st.button("Run One Autonomous Cycle"):
+    dependencies = build_dependencies(
+        api_key=OANDA_API_KEY,
+        account_id=OANDA_ACCOUNT_ID,
+    )
+    readiness = check_readiness(dependencies)
+
+    if readiness.get("ready") is not True:
+        st.error("DEMO_BLOCKED_READINESS")
+        st.write(readiness.get("failures"))
+    else:
+        st.session_state["autonomous_usdcad_last_result"] = run_cycle(
+            broker=dependencies["broker"],
+            state_manager=dependencies["state_manager"],
+            signal_provider=dependencies["signal_provider"],
+            proposal_queue=dependencies["proposal_queue"],
+            executor=dependencies["executor"],
+        )
+
+autonomous_result = st.session_state.get("autonomous_usdcad_last_result")
+if autonomous_result:
+    st.write("**Last cycle result**")
+
+    autonomous_signal = autonomous_result.get("signal") or {}
+    autonomous_execution = (
+        autonomous_result.get("execution_result") or {}
+    ).get("execution_result") or {}
+
+    st.write(f"Outcome: {autonomous_result.get('outcome')}")
+    st.write(f"Signal bias: {autonomous_signal.get('trade_bias')}")
+    st.write(f"Confidence: {autonomous_signal.get('confidence')}")
+    st.write(f"Proposal ID: {autonomous_result.get('proposal_id')}")
+    st.write(f"Stop loss price: {autonomous_result.get('stop_loss_price')}")
+    st.write(f"Fill price: {autonomous_execution.get('fill_price')}")
+    st.write(
+        f"Broker trade ID: {autonomous_execution.get('broker_trade_id')}"
+    )
 
 # --- Cleanup and auto-refresh ---
 state_manager.close()
