@@ -260,6 +260,20 @@ class OandaBroker(BrokerInterface):
             }
         }
 
+        # Optional broker-side take profit. The protective stop above is
+        # unconditional; an absent or invalid target simply omits this
+        # block and never affects the stop.
+        take_profit_price = order.get("take_profit_price")
+        if (
+            not isinstance(take_profit_price, bool)
+            and isinstance(take_profit_price, Real)
+            and math.isfinite(float(take_profit_price))
+            and float(take_profit_price) > 0.0
+        ):
+            payload["order"]["takeProfitOnFill"] = {
+                "price": str(take_profit_price),
+            }
+
         try:
             data = self._make_request("/orders", method="POST", body=payload)
         except RuntimeError as e:

@@ -507,6 +507,12 @@ class TradeOrchestrator:
             "stop_loss_price": proposed_trade["stop_loss_price"],
         }
 
+        # Only forwarded when a target exists, so an order without one is
+        # byte-identical to before take-profit support.
+        take_profit_price = proposed_trade.get("take_profit_price")
+        if take_profit_price is not None:
+            order["take_profit_price"] = take_profit_price
+
         logger.info({"event": "executing_trade", "request_id": request_id})
 
         try:

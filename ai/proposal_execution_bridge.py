@@ -123,6 +123,12 @@ class ProposalExecutionBridge:
             "loss_per_unit_at_stop": sizing.loss_per_unit_at_stop,
         }
 
+        # Optional, carried on the proposal. Added only when present, so
+        # sizing, the stop, and every existing field are unaffected.
+        proposal_take_profit = proposal.get("take_profit_price")
+        if proposal_take_profit is not None:
+            proposed_trade["take_profit_price"] = proposal_take_profit
+
         # Hand off to orchestrator — orchestrator enforces all deterministic controls
         try:
             result = orchestrator.process_trade(

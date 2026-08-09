@@ -25,6 +25,9 @@ from autonomy_usdcad_reconcile import reconcile_closed_usdcad_trade
 PRACTICE_BASE_URL = "https://api-fxpractice.oanda.com"
 USDCAD_PIP_SIZE = 0.0001
 AUTONOMOUS_STOP_DISTANCE_PIPS = 20.0
+# Campaign baseline: take profit at 1R, the same intended distance from
+# the reviewed entry quote as the protective stop.
+AUTONOMOUS_TAKE_PROFIT_PIPS = 20.0
 PRICE_DECIMAL_PLACES = 5
 
 
@@ -337,6 +340,32 @@ def run_cycle(
                 "local_filled_count": local_filled_count,
             }
 
+        # 1R take profit from the same reviewed entry quote as the stop.
+        # LONG targets above entry, SHORT below. The stop above is
+        # mandatory and unchanged; an invalid target is simply omitted.
+        take_profit_distance = (
+            AUTONOMOUS_TAKE_PROFIT_PIPS * USDCAD_PIP_SIZE
+        )
+        if direction == "LONG":
+            take_profit_price = round(
+                ask + take_profit_distance,
+                PRICE_DECIMAL_PLACES,
+            )
+        else:
+            take_profit_price = round(
+                bid - take_profit_distance,
+                PRICE_DECIMAL_PLACES,
+            )
+
+        if _is_positive_price(take_profit_price) and (
+            take_profit_price > ask
+            if direction == "LONG"
+            else take_profit_price < bid
+        ):
+            approved_proposal["take_profit_price"] = take_profit_price
+        else:
+            take_profit_price = None
+
         execution_result = executor(
             proposal=approved_proposal,
             raw_stop_loss_price=stop_loss_price,
@@ -385,6 +414,7 @@ def run_cycle(
             "proposal_count": proposal_count,
             "approval_succeeded": True,
             "stop_loss_price": stop_loss_price,
+            "take_profit_price": take_profit_price,
             "execution_succeeded": True,
             "execution_result": execution_result,
             "broker_open_count": broker_open_count,
