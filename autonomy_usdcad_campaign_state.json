@@ -1,0 +1,44 @@
+{
+  "campaign_id": "USDCAD_MVP_50_01",
+  "open_context": {
+    "288": {
+      "confidence": 85,
+      "stop_loss_price": 1.39573,
+      "take_profit_price": 1.39173
+    }
+  },
+  "status": "RUNNING",
+  "target_trades": 50,
+  "trades": [
+    {
+      "broker_trade_id": "276",
+      "closed_time": "2026-08-10T03:10:02.733094858Z",
+      "confidence": 85,
+      "direction": "SHORT",
+      "entry_price": 1.39451,
+      "exit_price": 1.39622,
+      "opened_time": "2026-08-09T23:02:41.750046305Z",
+      "realized_pl": -424.6135,
+      "result": "LOSS",
+      "stop_price": 1.39621,
+      "take_profit_price": 1.39221,
+      "trade_number": 1,
+      "units": -248312.0
+    },
+    {
+      "broker_trade_id": "282",
+      "closed_time": "2026-08-10T08:16:08.309485484Z",
+      "confidence": 85,
+      "direction": "SHORT",
+      "entry_price": 1.39601,
+      "exit_price": 1.39371,
+      "opened_time": "2026-08-10T03:11:17.820933474Z",
+      "realized_pl": 568.6773,
+      "result": "WIN",
+      "stop_price": 1.39771,
+      "take_profit_price": 1.39371,
+      "trade_number": 2,
+      "units": -247251.0
+    }
+  ]
+}
