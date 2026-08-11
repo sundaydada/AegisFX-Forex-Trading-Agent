@@ -7,3 +7,10 @@ tmp/
 trading_enabled.flag
 autonomy_settings.json
 logs/
+
+# Campaign runtime artifacts
+*.log
+*.pid
+*.db-wal
+*.db-shm
+autonomy_usdcad_campaign_state.json
