@@ -555,6 +555,146 @@ class OandaBroker(BrokerInterface):
             },
         }
 
+    def _closed_trade_from_transactions(self, trade_id: str) -> Dict:
+        """Rebuild one CLOSED trade from read-only transaction history.
+
+        Reached only when /trades/{id} answers 404 NO_SUCH_TRADE. It
+        requires exactly one ORDER_FILL whose tradesClosed names this
+        exact trade id on USD/CAD, with a usable close price, close
+        time, and realized P/L. Missing, ambiguous, malformed, or
+        non-USD/CAD evidence fails closed rather than guessing.
+        """
+
+        try:
+            since_id = int(str(trade_id).strip()) - 1
+        except (TypeError, ValueError):
+            return {
+                "lookup_status": "MALFORMED",
+                "reason": "trade_id is not a numeric OANDA trade id",
+            }
+
+        if since_id < 0:
+            return {
+                "lookup_status": "MALFORMED",
+                "reason": "trade_id is not a usable OANDA trade id",
+            }
+
+        try:
+            history = self._make_request(
+                f"/transactions/sinceid?id={since_id}"
+            )
+        except RuntimeError as exc:
+            return {"lookup_status": "ERROR", "reason": str(exc)}
+
+        transactions = history.get("transactions")
+        if not isinstance(transactions, list):
+            return {
+                "lookup_status": "MALFORMED",
+                "reason": "transaction history was not a list",
+            }
+
+        wanted = str(trade_id)
+        closing = []
+        opening = None
+
+        for transaction in transactions:
+            if (
+                not isinstance(transaction, dict)
+                or transaction.get("type") != "ORDER_FILL"
+            ):
+                continue
+
+            opened = transaction.get("tradeOpened") or {}
+            if str(opened.get("tradeID", "")) == wanted:
+                opening = transaction
+
+            for closed in transaction.get("tradesClosed") or []:
+                if (
+                    isinstance(closed, dict)
+                    and str(closed.get("tradeID", "")) == wanted
+                ):
+                    closing.append((transaction, closed))
+
+        if not closing:
+            return {
+                "lookup_status": "NOT_FOUND",
+                "reason": (
+                    "no closing transaction names trade"
+                    f" {wanted}; nothing was reconstructed"
+                ),
+            }
+
+        if len(closing) > 1:
+            return {
+                "lookup_status": "MALFORMED",
+                "reason": (
+                    f"{len(closing)} closing transactions name trade"
+                    f" {wanted}; the evidence is ambiguous"
+                ),
+            }
+
+        transaction, closed = closing[0]
+
+        if transaction.get("instrument") != "USD_CAD":
+            return {
+                "lookup_status": "MALFORMED",
+                "reason": (
+                    "the closing transaction is not USD/CAD:"
+                    f" {transaction.get('instrument')!r}"
+                ),
+            }
+
+        close_time = transaction.get("time")
+        try:
+            average_close_price = float(closed["price"])
+            realized_pl = float(closed["realizedPL"])
+        except (KeyError, TypeError, ValueError):
+            return {
+                "lookup_status": "MALFORMED",
+                "reason": (
+                    "the closing transaction lacks a usable price or"
+                    " realized P/L"
+                ),
+            }
+
+        if not isinstance(close_time, str) or not close_time.strip():
+            return {
+                "lookup_status": "MALFORMED",
+                "reason": "the closing transaction lacks a close time",
+            }
+
+        # Opening evidence enriches the ledger when present, and stays
+        # absent rather than invented when it is not.
+        open_price = None
+        open_time = ""
+        initial_units = None
+        if opening is not None:
+            try:
+                open_price = float(opening["price"])
+                initial_units = float(
+                    (opening.get("tradeOpened") or {})["units"]
+                )
+                open_time = opening.get("time") or ""
+            except (KeyError, TypeError, ValueError):
+                open_price = None
+                initial_units = None
+                open_time = ""
+
+        return {
+            "lookup_status": "FOUND",
+            "broker_trade_id": wanted,
+            "currency_pair": "USD/CAD",
+            "state": "CLOSED",
+            "open_price": open_price,
+            "open_time": open_time,
+            "initial_units": initial_units,
+            "current_units": 0.0,
+            "realized_pl": realized_pl,
+            "average_close_price": average_close_price,
+            "close_time": close_time,
+            "closing_transaction_ids": [str(transaction.get("id", ""))],
+        }
+
     def get_trade_details(self, trade_id: str) -> Dict:
         """Look up and normalize one OANDA Trade by its Trade ID."""
 
@@ -564,7 +704,19 @@ class OandaBroker(BrokerInterface):
                 "reason": "trade_id must be a non-empty string",
             }
 
-        data = self._make_request(f"/trades/{trade_id}")
+        try:
+            data = self._make_request(f"/trades/{trade_id}")
+        except RuntimeError as exc:
+            message = str(exc)
+            # A closed trade can disappear from /trades/{id}. Only that
+            # exact signal earns a transaction-history reconstruction;
+            # every other error fails closed.
+            if "404" in message and "NO_SUCH_TRADE" in message:
+                return self._closed_trade_from_transactions(trade_id)
+            return {
+                "lookup_status": "ERROR",
+                "reason": message,
+            }
 
         trade = data["trade"]
 

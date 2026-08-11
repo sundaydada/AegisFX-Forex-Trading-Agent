@@ -13,6 +13,7 @@ Importing this module defines constants and functions and does nothing
 else; nothing runs until main() is called.
 """
 
+import json
 import os
 import time
 
@@ -143,6 +144,84 @@ def run_one_pass(*, dependencies, state, broker_positions, filled) -> str:
     return outcome
 
 
+def poll_once(*, dependencies, state) -> str:
+    """Read broker and local state, then take one decision.
+
+    Raises whatever the broker or ledger raises; the caller owns the
+    failure boundary. Touches no collaborator once the campaign is
+    complete.
+    """
+
+    if not may_open_new_trade(state):
+        return "COMPLETE"
+
+    broker_positions = dependencies["broker"].get_open_positions() or []
+    filled = local_filled_trades(dependencies["state_manager"])
+
+    return run_one_pass(
+        dependencies=dependencies,
+        state=state,
+        broker_positions=broker_positions,
+        filled=filled,
+    )
+
+
+def run_campaign(
+    *,
+    dependencies,
+    state,
+    state_path=CAMPAIGN_STATE_PATH,
+    sleep=time.sleep,
+) -> dict:
+    """Poll until the campaign completes.
+
+    A single broker, network, or ledger failure must not end an
+    unattended campaign. A failed pass took no trading action and
+    changed no campaign state, so it is logged and skipped; the next
+    normal poll is the only recovery attempt. There is no retry here
+    and none inside the broker, reconciliation, or the cycle.
+
+    Only Exception is caught, so KeyboardInterrupt and SystemExit still
+    terminate the runner normally.
+    """
+
+    while not is_complete(state):
+        try:
+            status = poll_once(dependencies=dependencies, state=state)
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "event": "campaign_pass_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "action": "pass skipped; no trade, no count change",
+                    }
+                ),
+                flush=True,
+            )
+            sleep(POLL_SECONDS)
+            continue
+
+        save_campaign(state_path, state)
+
+        summary = campaign_summary(state)
+        print(
+            f"{status} | "
+            f"{summary['completed_closed_trades']}/{summary['target_trades']}"
+            f" | net {summary['net_realized_pl']}",
+            flush=True,
+        )
+
+        if is_complete(state):
+            break
+
+        sleep(POLL_SECONDS)
+
+    save_campaign(state_path, state)
+    return campaign_summary(state)
+
+
 def main():
     load_dotenv()
 
@@ -167,36 +246,10 @@ def main():
     print(f"Campaign {CAMPAIGN_ID} target {TARGET_CLOSED_TRADES}")
     print(campaign_summary(state))
 
-    broker = dependencies["broker"]
-    state_manager = dependencies["state_manager"]
+    summary = run_campaign(dependencies=dependencies, state=state)
 
-    while not is_complete(state):
-        broker_positions = broker.get_open_positions() or []
-        filled = local_filled_trades(state_manager)
-
-        status = run_one_pass(
-            dependencies=dependencies,
-            state=state,
-            broker_positions=broker_positions,
-            filled=filled,
-        )
-        save_campaign(CAMPAIGN_STATE_PATH, state)
-
-        summary = campaign_summary(state)
-        print(
-            f"{status} | "
-            f"{summary['completed_closed_trades']}/{summary['target_trades']}"
-            f" | net {summary['net_realized_pl']}"
-        )
-
-        if is_complete(state):
-            break
-
-        time.sleep(POLL_SECONDS)
-
-    save_campaign(CAMPAIGN_STATE_PATH, state)
-    print("CAMPAIGN_COMPLETE")
-    print(campaign_summary(state))
+    print("CAMPAIGN_COMPLETE", flush=True)
+    print(summary, flush=True)
 
 
 if __name__ == "__main__":
