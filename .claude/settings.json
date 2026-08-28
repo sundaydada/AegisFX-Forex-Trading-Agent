@@ -2,6 +2,9 @@
   "permissions": {
     "additionalDirectories": [
       "c:\\Users\\Dell\\OneDrive\\COLABERRY INTERNSHIP\\AegisFX Forex Trading Agent"
+    ],
+    "allow": [
+      "Bash(python -c ' *)"
     ]
   }
 }
