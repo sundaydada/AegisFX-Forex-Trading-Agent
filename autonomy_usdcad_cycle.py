@@ -415,6 +415,15 @@ def run_cycle(
             "approval_succeeded": True,
             "stop_loss_price": stop_loss_price,
             "take_profit_price": take_profit_price,
+            # Observational only: the decision-time quote this cycle used
+            # to derive the stop and target. Not the broker fill price —
+            # the fill can differ, and measuring that gap is the point.
+            # Read from locals already consumed above; no quote is
+            # fetched here and no decision reads these back.
+            "entry_bid": bid,
+            "entry_ask": ask,
+            "entry_spread": ask - bid,
+            "entry_spread_pips": (ask - bid) / USDCAD_PIP_SIZE,
             "execution_succeeded": True,
             "execution_result": execution_result,
             "broker_open_count": broker_open_count,

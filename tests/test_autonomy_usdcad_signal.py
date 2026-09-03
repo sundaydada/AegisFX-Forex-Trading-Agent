@@ -290,11 +290,29 @@ def test_signal_provider_returns_cycle_compatible_usdcad_signal():
         "trade_bias",
         "confidence",
         "execution_allowed",
+        "regime",
+        "trend",
+        "volatility",
+        "range_percentile",
+        "position_in_range",
+        "recommended_strategy",
+        "reason",
+        "summary",
     }, f"got keys {sorted(result)!r}"
     assert result == {
+        # decision fields — unchanged by observational capture
         "trade_bias": "LONG",
         "confidence": 85,
         "execution_allowed": True,
+        # observational fields — recorded, never read by a decision
+        "regime": "Trending",
+        "trend": "up",
+        "volatility": "low",
+        "range_percentile": 15.0,
+        "position_in_range": "LOWER",
+        "recommended_strategy": "Momentum_v1",
+        "reason": "Trending regime with strong confidence.",
+        "summary": "USD/CAD momentum is positive.",
     }, f"got signal {result!r}"
     assert result["trade_bias"] == RECOMMENDATION["trade_bias"], (
         "trade_bias must come from the recommendation"

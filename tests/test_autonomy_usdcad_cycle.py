@@ -1914,3 +1914,284 @@ def test_cycle_reconciles_confirmed_broker_closed_trade_before_mismatch():
     assert broker.close_position_calls == [], (
         "reconciliation records an existing close; it must not send one"
     )
+
+
+# --- observational feature capture: decision-invariance proof ---------
+#
+# The signal provider now returns market context alongside the three
+# decision fields. These tests run run_cycle twice against identical
+# collaborators, differing only in whether the observational fields are
+# present, and require every trading output to match. If any new field
+# reached a decision, a stop, a target, or the order payload, the two
+# runs would diverge.
+
+# The exact 3-key shape the provider returned before capture existed.
+BARE_SIGNAL = {
+    "trade_bias": "LONG",
+    "confidence": 85,
+    "execution_allowed": True,
+}
+
+# The same decision, plus the observational fields added in slice 1.
+ENRICHED_SIGNAL = dict(
+    BARE_SIGNAL,
+    regime="Trending",
+    trend="up",
+    volatility="low",
+    range_percentile=15.0,
+    position_in_range="LOWER",
+    recommended_strategy="Momentum_v1",
+    reason="SIGNAL-REASON-MUST-NOT-REACH-THE-PROPOSAL",
+    summary="USD/CAD momentum is positive.",
+)
+
+# "reason" is deliberately excluded: the proposal legitimately carries a
+# reason of its own, so it is checked by value instead of by absence.
+OBSERVATIONAL_SIGNAL_FIELDS = (
+    "regime",
+    "trend",
+    "volatility",
+    "range_percentile",
+    "position_in_range",
+    "recommended_strategy",
+    "summary",
+)
+
+EXPECTED_PROPOSAL_REASON = (
+    "Autonomous USD/CAD MVP proposal generated from an accepted signal."
+)
+
+
+def _run_cycle_with_signal(cycle, monkeypatch, signal, proposal_id):
+    """One full flat-to-executed cycle driven by the given signal."""
+
+    monkeypatch.setattr(cycle, "_new_proposal_id", lambda: proposal_id)
+
+    executor = _RecordingBoundExecutor(
+        {
+            "success": True,
+            "message": "Approved",
+            "request_id": f"AI-PROPOSAL-{proposal_id}",
+            "execution_result": {
+                "execution_status": "Filled",
+                "broker_order_id": "999",
+                "broker_trade_id": "999",
+                "currency_pair": "USD/CAD",
+                "direction": "Long",
+                "units": 26000.0,
+                "fill_price": 1.40821,
+                "timestamp": "2026-07-27T12:00:00.000000000Z",
+            },
+        }
+    )
+    broker = _RecordingBroker([], quote=USDCAD_QUOTE)
+    proposal_queue = _RecordingProposalQueue(
+        add_result=1,
+        approve_result=True,
+        approved_proposals=[
+            {
+                "proposal_id": proposal_id,
+                "pair": "USD/CAD",
+                "direction": "LONG",
+                "suggested_size": 0.5,
+                "confidence": 85,
+                "strategy": "Autonomous_USDCAD_MVP",
+                "reason": EXPECTED_PROPOSAL_REASON,
+                "status": "APPROVED",
+            }
+        ],
+    )
+
+    result = cycle.run_cycle(
+        broker=broker,
+        state_manager=_RecordingStateManager([]),
+        signal_provider=_RecordingSignalProvider(signal=signal),
+        proposal_queue=proposal_queue,
+        executor=executor,
+    )
+    return result, executor, proposal_queue, broker
+
+
+def test_observational_signal_fields_do_not_change_execution(monkeypatch):
+    """Adding context must not move any trading output."""
+
+    cycle = importlib.import_module(MODULE_NAME)
+    proposal_id = "PROP-AUTO-TEST-INVARIANCE-0001"
+
+    bare = _run_cycle_with_signal(
+        cycle, monkeypatch, BARE_SIGNAL, proposal_id
+    )
+    rich = _run_cycle_with_signal(
+        cycle, monkeypatch, ENRICHED_SIGNAL, proposal_id
+    )
+
+    bare_result, bare_executor, bare_queue, bare_broker = bare
+    rich_result, rich_executor, rich_queue, rich_broker = rich
+
+    assert bare_result["outcome"] == "PROPOSAL_EXECUTED", (
+        f"baseline did not execute; got {bare_result!r}"
+    )
+
+    # --- every trading decision is identical ---
+    for field in (
+        "outcome",
+        "proposal_id",
+        "proposal_count",
+        "approval_succeeded",
+        "execution_succeeded",
+        "stop_loss_price",
+        "take_profit_price",
+    ):
+        assert bare_result[field] == rich_result[field], (
+            f"observational capture changed {field!r}:"
+            f" {bare_result[field]!r} -> {rich_result[field]!r}"
+        )
+
+    # --- direction and size reaching execution are identical ---
+    for field in ("direction", "pair", "suggested_size", "confidence"):
+        assert (
+            bare_result["proposal"][field] == rich_result["proposal"][field]
+        ), f"observational capture changed proposal {field!r}"
+
+    # --- the executor sees the same call, exactly once, either way ---
+    assert len(bare_executor.calls) == 1
+    assert len(rich_executor.calls) == 1
+    assert (
+        bare_executor.calls[0]["raw_stop_loss_price"]
+        == rich_executor.calls[0]["raw_stop_loss_price"]
+    ), "observational capture changed the stop reaching the executor"
+    assert (
+        bare_executor.calls[0]["proposal"]
+        == rich_executor.calls[0]["proposal"]
+    ), "observational capture changed the proposal reaching the executor"
+
+    # --- no observational field leaks into the order path ---
+    executed_proposal = rich_executor.calls[0]["proposal"]
+    submitted_proposal = rich_queue.add_proposals_calls[0][0]
+    for field in OBSERVATIONAL_SIGNAL_FIELDS:
+        assert field not in executed_proposal, (
+            f"{field!r} leaked into the proposal sent to the executor"
+        )
+        assert field not in submitted_proposal, (
+            f"{field!r} leaked into the submitted proposal"
+        )
+
+    # reason exists on a proposal legitimately, so it is checked by value:
+    # the signal's reason must never overwrite the proposal's own.
+    assert submitted_proposal["reason"] == EXPECTED_PROPOSAL_REASON, (
+        "the signal's reason leaked into the submitted proposal"
+    )
+    assert executed_proposal["reason"] == EXPECTED_PROPOSAL_REASON, (
+        "the signal's reason leaked into the executed proposal"
+    )
+
+    # --- the broker is still never an execution path ---
+    for broker in (bare_broker, rich_broker):
+        assert broker.place_order_calls == []
+        assert broker.close_position_calls == []
+    assert bare_broker.get_quote_calls == rich_broker.get_quote_calls
+
+
+def test_observational_signal_fields_do_not_change_confidence_gating(
+    monkeypatch,
+):
+    """A rejected signal rejects identically with and without context."""
+
+    cycle = importlib.import_module(MODULE_NAME)
+    proposal_id = "PROP-AUTO-TEST-INVARIANCE-0002"
+
+    low_bare = dict(BARE_SIGNAL, confidence=65)
+    low_rich = dict(ENRICHED_SIGNAL, confidence=65)
+
+    bare_result, bare_executor, bare_queue, _ = _run_cycle_with_signal(
+        cycle, monkeypatch, low_bare, proposal_id
+    )
+    rich_result, rich_executor, rich_queue, _ = _run_cycle_with_signal(
+        cycle, monkeypatch, low_rich, proposal_id
+    )
+
+    assert bare_result["outcome"] == "SIGNAL_REJECTED_NO_ACTION", (
+        f"baseline was not rejected; got {bare_result['outcome']!r}"
+    )
+    assert bare_result["outcome"] == rich_result["outcome"], (
+        "observational capture changed the confidence gate"
+    )
+    assert _failure_reason(bare_result) == _failure_reason(rich_result), (
+        "observational capture changed the rejection reason"
+    )
+
+    for queue in (bare_queue, rich_queue):
+        assert queue.add_proposals_calls == []
+        assert queue.approve_proposal_calls == []
+    for executor in (bare_executor, rich_executor):
+        assert executor.calls == []
+
+
+QUOTE_OBSERVATIONAL_FIELDS = (
+    "entry_bid",
+    "entry_ask",
+    "entry_spread",
+    "entry_spread_pips",
+)
+
+
+def test_cycle_records_decision_time_quote_without_refetching(monkeypatch):
+    """The decision-time quote is recorded, not re-read or re-derived."""
+
+    cycle = importlib.import_module(MODULE_NAME)
+    proposal_id = "PROP-AUTO-TEST-QUOTE-CAPTURE-0001"
+
+    result, executor, proposal_queue, broker = _run_cycle_with_signal(
+        cycle, monkeypatch, ENRICHED_SIGNAL, proposal_id
+    )
+
+    assert result["outcome"] == "PROPOSAL_EXECUTED", f"got {result!r}"
+
+    expected_bid = USDCAD_QUOTE["bid"]
+    expected_ask = USDCAD_QUOTE["ask"]
+
+    # --- the recorded quote is the one the cycle actually used ---
+    assert result["entry_bid"] == expected_bid, (
+        f"got entry_bid {result['entry_bid']!r}"
+    )
+    assert result["entry_ask"] == expected_ask, (
+        f"got entry_ask {result['entry_ask']!r}"
+    )
+    assert result["entry_spread"] == expected_ask - expected_bid, (
+        f"got entry_spread {result['entry_spread']!r}"
+    )
+    assert result["entry_spread_pips"] == (
+        (expected_ask - expected_bid) / cycle.USDCAD_PIP_SIZE
+    ), f"got entry_spread_pips {result['entry_spread_pips']!r}"
+
+    # --- exactly one quote, for USD/CAD, as before ---
+    assert broker.get_quote_calls == ["USD/CAD"], (
+        f"the cycle must fetch exactly one quote; got"
+        f" {broker.get_quote_calls!r}"
+    )
+
+    # --- stop and target still derive from that same quote, unchanged ---
+    assert result["stop_loss_price"] == 1.40620, (
+        f"got stop_loss_price {result['stop_loss_price']!r}"
+    )
+    assert result["take_profit_price"] == 1.41020, (
+        f"got take_profit_price {result['take_profit_price']!r}"
+    )
+    assert executor.calls[0]["raw_stop_loss_price"] == 1.40620, (
+        "the stop reaching the executor must be unchanged"
+    )
+
+    # --- the quote fields never enter the order path ---
+    executed_proposal = executor.calls[0]["proposal"]
+    submitted_proposal = proposal_queue.add_proposals_calls[0][0]
+    for field in QUOTE_OBSERVATIONAL_FIELDS:
+        assert field not in executed_proposal, (
+            f"{field!r} leaked into the proposal sent to the executor"
+        )
+        assert field not in submitted_proposal, (
+            f"{field!r} leaked into the submitted proposal"
+        )
+
+    # --- the broker is still never an execution path ---
+    assert broker.place_order_calls == []
+    assert broker.close_position_calls == []

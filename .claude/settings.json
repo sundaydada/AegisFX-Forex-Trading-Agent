@@ -1,10 +1,13 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "PowerShell(python -m pytest tests/test_autonomy_usdcad_signal.py -q 2>&1 | Select-Object -Last 20; Write-Output \"EXIT=$LASTEXITCODE\")",
+      "PowerShell(python -m pytest tests/test_autonomy_usdcad_cycle.py tests/test_autonomy_usdcad_signal.py -q 2>&1 | Select-Object -Last 25; Write-Output \"EXIT=$LASTEXITCODE\")",
+      "PowerShell(git status --short; git diff --numstat; Write-Output \"--- get_quote call sites in cycle \\(must be exactly 1\\) ---\"; Select-String -Path autonomy_usdcad_cycle.py -Pattern 'get_quote' | ForEach-Object { \"$\\($_.LineNumber\\): $\\($_.Line.Trim\\(\\)\\)\" })"
+    ],
     "additionalDirectories": [
       "c:\\Users\\Dell\\OneDrive\\COLABERRY INTERNSHIP\\AegisFX Forex Trading Agent"
-    ],
-    "allow": [
-      "Bash(python -c ' *)"
     ]
   }
 }

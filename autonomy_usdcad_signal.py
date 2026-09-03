@@ -70,6 +70,14 @@ class UsdCadSignalProvider:
                 market_context,
             )
 
+            # Observational only. These fields are recorded so a closed
+            # trade can later be explained; no decision reads them. They
+            # use .get so a sparse response cannot create a new failure
+            # mode on a path that succeeds today — the three decision
+            # fields below are still indexed directly and still fail
+            # closed first if the response is malformed.
+            observed = context if isinstance(context, dict) else {}
+
             # confidence comes from the analysis: the recommendation
             # service consumes it for its rules but does not return it.
             return {
@@ -78,6 +86,16 @@ class UsdCadSignalProvider:
                 "execution_allowed": bool(
                     recommendation["execution_allowed"]
                 ),
+                "regime": analysis.get("regime"),
+                "trend": observed.get("trend"),
+                "volatility": observed.get("volatility"),
+                "range_percentile": observed.get("range_percentile"),
+                "position_in_range": observed.get("position_in_range"),
+                "recommended_strategy": recommendation.get(
+                    "recommended_strategy"
+                ),
+                "reason": recommendation.get("reason"),
+                "summary": analysis.get("summary"),
             }
         except Exception:
             return _neutral_signal()
