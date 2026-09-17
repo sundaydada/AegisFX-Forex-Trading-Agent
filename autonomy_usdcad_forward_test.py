@@ -37,6 +37,28 @@ from autonomy_usdcad_wiring import build_dependencies, check_readiness
 CAMPAIGN_STATE_PATH = "autonomy_usdcad_campaign_state.json"
 POLL_SECONDS = 60.0
 
+# Persistence-only shaping for the observational context. Model text is
+# unbounded and the state file is rewritten every pass, so it is capped
+# on the way to disk; the spread is rounded only when stored. Neither
+# rule touches the values run_cycle returned.
+CONTEXT_TEXT_MAX_CHARS = 300
+SPREAD_PIPS_DECIMALS = 4
+
+
+def _capped_text(value, limit=CONTEXT_TEXT_MAX_CHARS):
+    """Cap persisted model text. Non-strings pass through untouched."""
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit]
+    return value
+
+
+def _rounded_pips(value, decimals=SPREAD_PIPS_DECIMALS):
+    """Round the persisted spread. A missing value stays missing."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    return round(value, decimals)
+
+
 # Outcomes that mean "nothing to do right now" rather than a failure.
 SAFE_NO_ACTION_OUTCOMES = frozenset(
     {
@@ -132,13 +154,32 @@ def run_one_pass(*, dependencies, state, broker_positions, filled) -> str:
         broker_result = (
             result.get("execution_result") or {}
         ).get("execution_result") or {}
+        signal = result.get("signal") or {}
         remember_open_context(
             state,
             broker_result.get("broker_trade_id"),
             {
-                "confidence": (result.get("signal") or {}).get("confidence"),
+                # Unchanged by this slice.
+                "confidence": signal.get("confidence"),
                 "stop_loss_price": result.get("stop_loss_price"),
                 "take_profit_price": result.get("take_profit_price"),
+                # Observational context, so a closed trade can later be
+                # explained. Nothing reads these back to make a decision.
+                "regime": signal.get("regime"),
+                "trend": signal.get("trend"),
+                "volatility": signal.get("volatility"),
+                "range_percentile": signal.get("range_percentile"),
+                "position_in_range": signal.get("position_in_range"),
+                "recommended_strategy": signal.get("recommended_strategy"),
+                "reason": _capped_text(signal.get("reason")),
+                "summary": _capped_text(signal.get("summary")),
+                "proposal_id": result.get("proposal_id"),
+                "entry_bid": result.get("entry_bid"),
+                "entry_ask": result.get("entry_ask"),
+                "entry_spread": result.get("entry_spread"),
+                "entry_spread_pips": _rounded_pips(
+                    result.get("entry_spread_pips")
+                ),
             },
         )
     return outcome

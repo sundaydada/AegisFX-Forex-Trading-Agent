@@ -265,6 +265,223 @@ def test_take_profit_geometry_and_mandatory_stop_for_both_directions():
         monkeypatch.undo()
 
 
+# --- slice 4: observational context persisted into open_context ------
+
+import autonomy_usdcad_forward_test as forward_test
+
+EXPECTED_CONTEXT_KEYS = {
+    "confidence",
+    "stop_loss_price",
+    "take_profit_price",
+    "regime",
+    "trend",
+    "volatility",
+    "range_percentile",
+    "position_in_range",
+    "recommended_strategy",
+    "reason",
+    "summary",
+    "proposal_id",
+    "entry_bid",
+    "entry_ask",
+    "entry_spread",
+    "entry_spread_pips",
+}
+
+# A 2-pip spread as float arithmetic actually produces it.
+RAW_SPREAD = 1.40820 - 1.40800
+RAW_SPREAD_PIPS = RAW_SPREAD / 0.0001
+
+
+def _executed_result(reason="Trending regime.", summary="Momentum up."):
+    return {
+        "outcome": "PROPOSAL_EXECUTED",
+        "proposal_id": "PROP-AUTO-SLICE4-0001",
+        "stop_loss_price": 1.40620,
+        "take_profit_price": 1.41020,
+        "entry_bid": 1.40800,
+        "entry_ask": 1.40820,
+        "entry_spread": RAW_SPREAD,
+        "entry_spread_pips": RAW_SPREAD_PIPS,
+        "signal": {
+            "trade_bias": "LONG",
+            "confidence": 85,
+            "execution_allowed": True,
+            "regime": "Trending",
+            "trend": "up",
+            "volatility": "low",
+            "range_percentile": 15.0,
+            "position_in_range": "LOWER",
+            "recommended_strategy": "Momentum_v1",
+            "reason": reason,
+            "summary": summary,
+        },
+        "execution_result": {
+            "execution_result": {
+                "execution_status": "Filled",
+                "broker_trade_id": "901",
+            }
+        },
+    }
+
+
+def _execute_one(monkeypatch, state, result):
+    """Drive one flat pass whose cycle returns the given result."""
+    monkeypatch.setattr(forward_test, "run_cycle", lambda **kwargs: result)
+    return forward_test.run_one_pass(
+        dependencies={
+            "broker": object(),
+            "state_manager": object(),
+            "signal_provider": object(),
+            "proposal_queue": object(),
+            "executor": object(),
+        },
+        state=state,
+        broker_positions=[],
+        filled=[],
+    )
+
+
+def test_executed_trade_persists_observational_context(monkeypatch):
+    state = campaign.new_campaign()
+    result = _executed_result()
+
+    status = _execute_one(monkeypatch, state, result)
+
+    assert status == "PROPOSAL_EXECUTED"
+    stored = state["open_context"]["901"]
+    assert set(stored) == EXPECTED_CONTEXT_KEYS, (
+        f"got context keys {sorted(stored)!r}"
+    )
+
+    # decision fields are byte-identical to the cycle result
+    assert stored["confidence"] == 85
+    assert stored["stop_loss_price"] == result["stop_loss_price"]
+    assert stored["take_profit_price"] == result["take_profit_price"]
+
+    # observational fields carried through unchanged
+    assert stored["regime"] == "Trending"
+    assert stored["trend"] == "up"
+    assert stored["volatility"] == "low"
+    assert stored["range_percentile"] == 15.0
+    assert stored["position_in_range"] == "LOWER"
+    assert stored["recommended_strategy"] == "Momentum_v1"
+    assert stored["proposal_id"] == "PROP-AUTO-SLICE4-0001"
+    assert stored["entry_bid"] == 1.40800
+    assert stored["entry_ask"] == 1.40820
+
+    # raw spread preserved exactly; pips rounded only at persistence
+    assert stored["entry_spread"] == RAW_SPREAD, (
+        f"entry_spread must stay unrounded; got {stored['entry_spread']!r}"
+    )
+    assert stored["entry_spread_pips"] == round(RAW_SPREAD_PIPS, 4)
+    assert result["entry_spread_pips"] == RAW_SPREAD_PIPS, (
+        "rounding must not alter the run_cycle return value"
+    )
+
+    # counting is untouched: an open trade is not a closed trade
+    assert campaign.completed_closed_trades(state) == 0
+
+
+def test_persisted_model_text_is_capped_without_altering_the_signal(
+    monkeypatch,
+):
+    state = campaign.new_campaign()
+    long_reason = "R" * 500
+    long_summary = "S" * 500
+    result = _executed_result(reason=long_reason, summary=long_summary)
+
+    _execute_one(monkeypatch, state, result)
+
+    stored = state["open_context"]["901"]
+    assert len(stored["reason"]) == 300, f"got {len(stored['reason'])}"
+    assert len(stored["summary"]) == 300, f"got {len(stored['summary'])}"
+    assert stored["reason"] == long_reason[:300]
+    assert stored["summary"] == long_summary[:300]
+
+    # the signal provider's own values are never mutated
+    assert len(result["signal"]["reason"]) == 500
+    assert len(result["signal"]["summary"]) == 500
+
+    # a short string is stored whole, not padded or truncated
+    short_state = campaign.new_campaign()
+    _execute_one(monkeypatch, short_state, _executed_result())
+    assert short_state["open_context"]["901"]["reason"] == "Trending regime."
+
+
+def test_missing_observational_values_persist_as_none(monkeypatch):
+    """A sparse cycle result must not invent or backfill context."""
+
+    state = campaign.new_campaign()
+    sparse = {
+        "outcome": "PROPOSAL_EXECUTED",
+        "stop_loss_price": 1.40620,
+        "take_profit_price": 1.41020,
+        "signal": {"confidence": 85},
+        "execution_result": {
+            "execution_result": {"broker_trade_id": "902"}
+        },
+    }
+
+    _execute_one(monkeypatch, state, sparse)
+
+    stored = state["open_context"]["902"]
+    assert set(stored) == EXPECTED_CONTEXT_KEYS
+    for field in (
+        "regime",
+        "trend",
+        "volatility",
+        "range_percentile",
+        "position_in_range",
+        "recommended_strategy",
+        "reason",
+        "summary",
+        "proposal_id",
+        "entry_bid",
+        "entry_ask",
+        "entry_spread",
+        "entry_spread_pips",
+    ):
+        assert stored[field] is None, (
+            f"{field!r} must stay absent, not be invented;"
+            f" got {stored[field]!r}"
+        )
+    assert stored["stop_loss_price"] == 1.40620
+    assert stored["take_profit_price"] == 1.41020
+
+
+def test_legacy_sparse_open_context_still_counts_exactly_once(tmp_path):
+    """Pre-slice-4 entries with three keys remain valid and countable."""
+
+    path = str(tmp_path / "legacy.json")
+    state = campaign.new_campaign()
+    # exactly the shape written before this slice
+    state["open_context"]["777"] = {
+        "confidence": 85,
+        "stop_loss_price": 1.39573,
+        "take_profit_price": 1.39173,
+    }
+    campaign.save_campaign(path, state)
+
+    reloaded = campaign.load_campaign(path)
+    assert set(reloaded["open_context"]["777"]) == {
+        "confidence",
+        "stop_loss_price",
+        "take_profit_price",
+    }
+
+    assert campaign.record_closed_trade(reloaded, _closed("777")) is True
+    assert campaign.completed_closed_trades(reloaded) == 1
+    assert campaign.record_closed_trade(reloaded, _closed("777")) is False
+    assert campaign.completed_closed_trades(reloaded) == 1
+
+    row = reloaded["trades"][0]
+    assert row["confidence"] == 85
+    assert row["stop_price"] == 1.39573
+    assert row["take_profit_price"] == 1.39173
+    assert campaign.campaign_summary(reloaded)["completed_closed_trades"] == 1
+
+
 def test_practice_endpoint_remains_mandatory():
     """The campaign inherits the cycle's practice-only refusal."""
 
